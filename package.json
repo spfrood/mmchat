@@ -1,0 +1,24 @@
+{
+  "name": "mmchat",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Multi-Model AI Chat Client — monorepo root",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:proxy": "concurrently -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client:proxy\"",
+    "dev:server": "npm --workspace server run dev",
+    "dev:client": "npm --workspace client run dev",
+    "dev:client:proxy": "npm --workspace client run dev:proxy",
+    "start:server": "npm --workspace server run start",
+    "build:client": "npm --workspace client run build",
+    "migrate": "npm --workspace server run migrate",
+    "migrate:status": "npm --workspace server run migrate:status"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
