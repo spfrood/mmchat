@@ -45,8 +45,68 @@ conversation with one model.
   required anywhere in the app.
 - **Recovery is manual by design.** No password-reset email flow. If a user
   loses their password and their TOTP backup codes, you reset them directly via
-  DB access on the VPS (document the exact commands in this bible once built,
-  same pattern as originally planned for the passkey approach).
+  DB access on the VPS — see "Manual Account Recovery" below.
+
+## Manual Account Recovery
+
+No email reset flow exists by design. To recover a locked-out user, run these on
+the VPS from the `server/` directory (they need the DB env from `.env`). Two
+paths: the built-in CLI (preferred — handles argon2 hashing) or raw SQL for the
+parts that don't need hashing.
+
+### CLI (preferred) — `scripts/reset-user.js`
+
+```sh
+# Reset password only (also revokes all trusted devices):
+node scripts/reset-user.js --email user@example.com --password 'NewStrongPass1'
+
+# Reset TOTP only — user re-enrolls a fresh authenticator on next login:
+node scripts/reset-user.js --email user@example.com --reset-totp
+
+# Full lockout recovery (new password AND fresh TOTP enrollment):
+node scripts/reset-user.js --email user@example.com --password 'NewStrongPass1' --reset-totp
+
+# Grant / revoke admin:
+node scripts/reset-user.js --email user@example.com --make-admin
+node scripts/reset-user.js --email user@example.com --remove-admin
+```
+
+After `--reset-totp`, the user logs in with their password and is sent straight
+into TOTP re-enrollment (new QR + new backup codes), then verifies a code to
+finish. Any password or TOTP change revokes all of that user's trusted devices.
+
+### Raw SQL (no hashing needed)
+
+Passwords can't be set via raw SQL (argon2 hashing required — use the CLI). But
+these work directly in `psql` (`sudo -u postgres psql -d mmchat`):
+
+```sql
+-- Force fresh TOTP enrollment on next login (deletes the secret + backup codes):
+DELETE FROM totp_secrets WHERE user_id = (SELECT id FROM users WHERE email = 'user@example.com');
+
+-- Revoke all trusted devices (force full re-auth everywhere):
+DELETE FROM trusted_devices WHERE user_id = (SELECT id FROM users WHERE email = 'user@example.com');
+
+-- Toggle admin:
+UPDATE users SET is_admin = true  WHERE email = 'user@example.com';
+UPDATE users SET is_admin = false WHERE email = 'user@example.com';
+
+-- Invalidate a user's live sessions (log them out everywhere):
+DELETE FROM sessions
+ WHERE (sess ->> 'userId') = (SELECT id::text FROM users WHERE email = 'user@example.com');
+```
+
+### First admin (bootstrap)
+
+There's no admin to issue the first invite, so mint one from the CLI (it has DB
+access, so it needs no existing admin):
+
+```sh
+node scripts/create-invite.js --admin
+```
+
+Then open the frontend at the printed `/register?token=…` link to create the
+admin account (sets password, enrolls TOTP, shows backup codes once).
 
 ## Core Chat UI
 
@@ -214,8 +274,10 @@ trusted_devices
   -- revocable individually (settings) or in bulk (password change, admin reset)
 
 invite_tokens
-  id, token_hash, created_by_user_id, used_at, expires_at, created_at
+  id, token_hash, created_by_user_id, used_at, expires_at, created_at, is_admin
   -- admin-generated, single-use, shared out-of-band; replaces self-service signup
+  -- is_admin (migration 002): the account created from this invite becomes an
+  -- admin. Lets the first admin be bootstrapped through the normal invite flow.
 
 api_keys
   id, user_id, encrypted_key, key_suffix, label, created_at

@@ -1,0 +1,22 @@
+{
+  "name": "@mmchat/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Multi-Model AI Chat Client — React + Vite frontend",
+  "scripts": {
+    "dev": "vite",
+    "dev:proxy": "VITE_BEHIND_PROXY=1 vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.7"
+  }
+}

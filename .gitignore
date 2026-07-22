@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+out/
+.vite/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime / process managers
+pids/
+*.pid
+*.seed
+*.pid.lock
+.pm2/
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# User-uploaded & generated media (local storage cap)
+uploads/
+media/
+storage/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Caches
+.cache/
+.eslintcache
+.npm/
