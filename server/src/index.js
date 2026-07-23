@@ -7,6 +7,8 @@ import { config } from './config.js';
 import { pool, pingDatabase } from './db.js';
 import { csrfOriginCheck } from './auth/middleware.js';
 import { authRouter } from './auth/routes.js';
+import { chatsRouter } from './chats/routes.js';
+import { keysRouter } from './keys/routes.js';
 
 const app = express();
 
@@ -56,6 +58,10 @@ app.get('/api/health/db', async (_req, res) => {
 
 // ── auth ─────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRouter);
+
+// ── app: chats + BYOK key ──────────────────────────────────────────────────
+app.use('/api/chats', chatsRouter);
+app.use('/api/keys', keysRouter);
 
 const server = app.listen(config.port, () => {
   console.log(`[mmchat] server listening on http://localhost:${config.port} (${config.env})`);

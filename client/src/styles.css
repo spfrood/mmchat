@@ -59,7 +59,7 @@ label.check {
   gap: 0.5rem;
 }
 
-input[type='text'], input[type='email'], input[type='password'], input:not([type]) {
+input[type='text'], input[type='email'], input[type='password'], input:not([type]), select {
   width: 100%;
   margin-top: 0.35rem;
   padding: 0.6rem 0.7rem;
@@ -140,3 +140,169 @@ a { color: var(--accent); }
 .placeholder { padding: 3rem 0; text-align: center; }
 .admin { max-width: none; margin-top: 1.5rem; }
 .invite-out { margin-top: 1rem; }
+
+/* ── app shell (Step 2: sidebar + panes) ────────────────────── */
+.app-shell {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: 100vh;
+}
+.app-shell.sidebar-collapsed { grid-template-columns: 52px 1fr; }
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  min-height: 100vh;
+}
+.sidebar.collapsed {
+  align-items: center;
+  padding-top: 0.75rem;
+  gap: 0.5rem;
+}
+.sidebar-head {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.new-chat {
+  flex: 1;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+}
+.icon-btn {
+  width: auto;
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 1rem;
+  line-height: 1;
+}
+.icon-btn:hover { color: var(--text); }
+
+.chat-list { flex: 1; overflow-y: auto; padding: 0.5rem; }
+.chat-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.chat-item:hover { background: #0f1117; }
+.chat-item.active { background: #0f1117; outline: 1px solid var(--border); }
+.chat-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-modality {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.05rem 0.35rem;
+}
+.pad { padding: 0.6rem; }
+
+.sidebar-foot { padding: 0.5rem; border-top: 1px solid var(--border); }
+.foot-link {
+  display: block;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.foot-link:hover, .foot-link.active { background: #0f1117; color: var(--text); }
+
+.main-col { display: flex; flex-direction: column; min-height: 100vh; min-width: 0; }
+.main-col .topbar { padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border); }
+.topbar-right { display: flex; align-items: center; gap: 1rem; }
+.link-btn {
+  width: auto;
+  margin: 0;
+  padding: 0.35rem 0.7rem;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.pane { flex: 1; padding: 1.5rem; overflow-y: auto; }
+
+.pane-empty { max-width: 520px; margin: 3rem auto; text-align: center; }
+.pane-empty button.inline { width: auto; padding: 0.55rem 1.1rem; }
+
+/* chat pane */
+.chat-pane { max-width: 760px; margin: 0 auto; }
+.chat-settings.card, .settings .card { max-width: none; }
+.row-btns { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+.row-btns button { width: auto; margin: 0; padding: 0.55rem 1rem; }
+button.danger { background: transparent; color: var(--error); border: 1px solid var(--error); }
+.thread { margin-top: 1.5rem; }
+.thread-empty {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 3rem 1rem;
+  text-align: center;
+}
+
+/* settings */
+.settings { max-width: 640px; margin: 0 auto; }
+.settings h1 { margin: 0 0 1rem; }
+.settings .card { margin-bottom: 1.5rem; }
+.key-status { margin: 0.75rem 0; }
+.secret.inline { display: inline; padding: 0.15rem 0.4rem; }
+
+/* ── sidebar chat row + kebab (edit menu) ───────────────────── */
+.chat-row { display: flex; align-items: center; }
+.chat-row .chat-item { flex: 1; min-width: 0; }
+.kebab {
+  width: auto;
+  margin: 0 0.15rem 0 0;
+  padding: 0.35rem 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  line-height: 1;
+  opacity: 0.5;
+}
+.chat-row:hover .kebab { opacity: 1; }
+.kebab:hover { color: var(--text); background: #0f1117; }
+
+/* ── chat pane header + dismissible editor ──────────────────── */
+.chat-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+.chat-heading { margin: 0; font-size: 1.35rem; overflow: hidden; text-overflow: ellipsis; }
+.chat-settings.card { margin-top: 1rem; }
+.card-head { display: flex; align-items: center; justify-content: space-between; }
+.card-head h2, .card-head p { margin: 0; }
+.close-x {
+  width: auto;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.close-x:hover { color: var(--text); background: #0f1117; }
+
+/* ── settings: header + collapsible sections ────────────────── */
+.settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.settings-head h1 { margin: 0; }
+.card-head.clickable { cursor: pointer; }
+.card-head.clickable h2 { margin: 0; }
+.card-body { margin-top: 0.75rem; }
