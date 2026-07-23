@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireAuth } from '../auth/middleware.js';
+import { listMessages, sendMessage } from './completion.js';
 
 // /api/chats — chat CRUD. A chat is a container (title, model_id, modality) with
 // its own message thread; Step 2 creates/renames/deletes chats but wires up no
@@ -133,6 +134,10 @@ chatsRouter.patch('/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to update chat' });
   }
 });
+
+// ── messages (thread + send) ────────────────────────────────────────────────
+chatsRouter.get('/:id/messages', listMessages);
+chatsRouter.post('/:id/messages', sendMessage);
 
 // Delete a chat (cascades to its messages via the FK).
 chatsRouter.delete('/:id', async (req, res) => {

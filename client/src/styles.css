@@ -306,3 +306,161 @@ button.danger { background: transparent; color: var(--error); border: 1px solid 
 .card-head.clickable { cursor: pointer; }
 .card-head.clickable h2 { margin: 0; }
 .card-body { margin-top: 0.75rem; }
+
+/* ── Step 3: model bar, provider controls ───────────────────── */
+.model-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 0.75rem;
+}
+.model-select {
+  width: auto;
+  margin: 0;
+  padding: 0.45rem 0.8rem;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-weight: 500;
+  font-size: 0.9rem;
+  max-width: 100%;
+}
+.model-select:hover { border-color: var(--accent); }
+.model-current { font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; }
+.provider-controls { display: flex; align-items: center; gap: 0.75rem; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button {
+  width: auto;
+  margin: 0;
+  padding: 0.35rem 0.7rem;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-radius: 0;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+.seg button.on { background: var(--accent); color: #0b0e16; }
+label.check.privacy { margin: 0; font-size: 0.82rem; color: var(--muted); }
+
+/* ── modal (model picker) ───────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid; place-items: center;
+  padding: 1.5rem; z-index: 50;
+}
+.modal {
+  width: 100%; max-width: 640px;
+  max-height: 80vh; display: flex; flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.modal-head, .picker-filters { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); }
+.modal-head { display: flex; align-items: center; justify-content: space-between; }
+.modal-head h2 { margin: 0; }
+.picker-filters { display: flex; gap: 0.6rem; }
+.picker-filters input { margin: 0; flex: 1; }
+.picker-filters select { margin: 0; width: auto; }
+.model-list { overflow-y: auto; padding: 0.5rem; }
+.model-item {
+  width: 100%; margin: 0 0 0.4rem; padding: 0.7rem 0.8rem;
+  background: #0f1117; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  text-align: left; font-weight: 400; cursor: pointer;
+}
+.model-item:hover { border-color: var(--accent); }
+.model-item.selected { border-color: var(--accent); outline: 1px solid var(--accent); }
+.model-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
+.model-name { font-weight: 600; }
+.model-price { flex-shrink: 0; font-size: 0.78rem; color: var(--accent); }
+.model-id { font-family: ui-monospace, monospace; margin-top: 0.15rem; }
+.model-desc { margin: 0.4rem 0 0; line-height: 1.35; }
+
+/* ── message thread + composer ──────────────────────────────── */
+.chat-pane { display: flex; flex-direction: column; min-height: 0; }
+.thread { flex: 1; overflow-y: auto; }
+.msgs { display: flex; flex-direction: column; gap: 0.9rem; padding-bottom: 0.5rem; }
+.msg { border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.8rem; }
+.msg.user { background: #161a24; }
+.msg.assistant { background: var(--panel); }
+.msg-role {
+  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); margin-bottom: 0.3rem;
+}
+.msg-content { white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+.caret { color: var(--accent); animation: blink 1s steps(2, start) infinite; }
+@keyframes blink { to { visibility: hidden; } }
+
+.send-error { margin: 0.75rem 0 0; padding: 0.6rem 0.8rem; border-radius: 8px; font-size: 0.9rem; }
+.send-error.act { background: #2a1a1a; border: 1px solid var(--error); color: #ffd7d7; }
+.send-error.model { background: #22222c; border: 1px solid var(--border); color: var(--text); }
+
+.composer { display: flex; gap: 0.6rem; align-items: flex-end; margin-top: 0.9rem; }
+.composer textarea {
+  flex: 1; resize: vertical; min-height: 2.6rem;
+  padding: 0.6rem 0.7rem; margin: 0;
+  background: #0f1117; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  font: inherit; font-size: 0.95rem;
+}
+.composer button { width: auto; margin: 0; padding: 0.6rem 1.2rem; align-self: stretch; }
+
+/* ── Step 3.1 layout: full-height shell, pinned composer, independent scroll ──
+   The shell is exactly one viewport tall and hides overflow, so nothing scrolls
+   as a whole. Inside it, only two regions scroll on their own: the sidebar's
+   chat list and the chat message thread. The new-chat button (top) and Settings
+   link (bottom) stay put; the composer stays pinned below a scrolling thread. */
+html, body, #root { height: 100%; }
+
+.app-shell { height: 100vh; min-height: 0; overflow: hidden; grid-template-rows: minmax(0, 1fr); }
+
+.sidebar { height: 100%; min-height: 0; overflow: hidden; }
+.sidebar-head, .sidebar-foot { flex-shrink: 0; }
+.chat-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+.main-col { height: 100%; min-height: 0; overflow: hidden; }
+.main-col .topbar { flex-shrink: 0; }
+
+.pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+
+.chat-pane {
+  flex: 1 1 auto; min-height: 0;
+  width: 100%; max-width: 860px; margin: 0 auto; align-self: center;
+  display: flex; flex-direction: column;
+  padding: 1.1rem 1.5rem 1rem;
+}
+.chat-header, .model-bar, .chat-settings.card, .send-error, .composer { flex-shrink: 0; }
+.thread { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-top: 0.5rem; }
+.composer { margin-top: 0.8rem; }
+
+/* non-chat panes (settings / empty) scroll within the fixed shell */
+.settings {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  width: 100%; max-width: 640px; margin: 0 auto; align-self: center;
+  padding: 1.5rem;
+}
+.pane-empty { align-self: center; width: 100%; max-width: 520px; margin: 3rem auto; padding: 0 1.5rem; }
+
+/* ── Step 3.2: routing-control clarity + per-reply cost ──────── */
+.ctrl-label { font-size: 0.8rem; color: var(--muted); }
+.info-btn {
+  width: auto; margin: 0; padding: 0.1rem 0.35rem;
+  background: transparent; color: var(--muted);
+  border: none; border-radius: 6px; font-size: 0.95rem; line-height: 1;
+}
+.info-btn:hover { color: var(--accent); }
+.routing-help {
+  margin: 0 0 0.6rem;
+  padding: 0.55rem 0.7rem;
+  background: #161a24;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  line-height: 1.45;
+}
+.msg-cost { margin-top: 0.35rem; font-family: ui-monospace, monospace; }

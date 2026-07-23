@@ -34,4 +34,10 @@ export const config = {
       : process.env.NODE_ENV === 'production',
 
   trustedDeviceDays: Number(process.env.TRUSTED_DEVICE_DAYS || 30),
+
+  // OpenRouter API. Base URL is overridable for tests/mocks. The title/referer
+  // are optional attribution headers OpenRouter uses for app rankings.
+  openrouterBaseUrl: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
+  openrouterTitle: process.env.OPENROUTER_APP_TITLE || 'mmchat',
+  openrouterReferer: process.env.OPENROUTER_APP_URL || '',
 };
