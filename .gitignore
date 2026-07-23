@@ -33,10 +33,15 @@ pids/
 coverage/
 .nyc_output/
 
-# User-uploaded & generated media (local storage cap)
-uploads/
-media/
-storage/
+# User-uploaded & generated media (local storage cap).
+# Anchored so these only ignore runtime storage dirs — NOT source dirs like
+# server/src/media or server/src/storage.
+/uploads/
+/media/
+/storage/
+/server/uploads/
+/server/media/
+/server/storage/
 
 # Editor / OS
 .vscode/

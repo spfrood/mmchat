@@ -1,7 +1,31 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { pool } from '../db.js';
+import { config } from '../config.js';
 import { requireAuth } from '../auth/middleware.js';
 import { listMessages, sendMessage } from './completion.js';
+
+// Attachments are held in memory (small images) so we can both base64-embed them
+// in the OpenRouter request and write them to local storage. multer only parses
+// multipart requests; plain-JSON sends pass straight through.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: config.maxUploadBytes, files: config.maxAttachments },
+});
+
+function uploadAttachments(req, res, next) {
+  upload.array('files', config.maxAttachments)(req, res, (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE'
+        ? 'An attachment is too large (max 20 MB each).'
+        : err.code === 'LIMIT_FILE_COUNT'
+          ? 'Too many attachments.'
+          : 'Upload failed.';
+      return res.status(400).json({ error: msg, category: 'request' });
+    }
+    next();
+  });
+}
 
 // /api/chats — chat CRUD. A chat is a container (title, model_id, modality) with
 // its own message thread; Step 2 creates/renames/deletes chats but wires up no
@@ -137,7 +161,7 @@ chatsRouter.patch('/:id', async (req, res) => {
 
 // ── messages (thread + send) ────────────────────────────────────────────────
 chatsRouter.get('/:id/messages', listMessages);
-chatsRouter.post('/:id/messages', sendMessage);
+chatsRouter.post('/:id/messages', uploadAttachments, sendMessage);
 
 // Delete a chat (cascades to its messages via the FK).
 chatsRouter.delete('/:id', async (req, res) => {

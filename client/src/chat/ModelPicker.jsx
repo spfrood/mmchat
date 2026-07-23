@@ -89,7 +89,10 @@ export default function ModelPicker({ modality = 'text', currentModelId, onSelec
               onClick={() => { onSelect(m); onClose(); }}
             >
               <div className="model-item-head">
-                <span className="model-name">{m.name}</span>
+                <span className="model-name">
+                  {m.name}
+                  {m.inputModalities?.includes('image') && <span className="badge vision" title="Accepts image input">vision</span>}
+                </span>
                 <span className="model-price">{priceLabel(m.pricing)}</span>
               </div>
               <div className="model-id muted small">{m.id}</div>

@@ -8,10 +8,12 @@ import { ApiError } from '../api.js';
 //   { type: 'error', category, message, messageId }
 //   { type: 'done',  messageId, cost }
 export async function streamMessage(chatId, body, handlers = {}) {
+  const isForm = body instanceof FormData;
   const res = await fetch(`/api/chats/${chatId}/messages`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    // For FormData, let the browser set the multipart Content-Type + boundary.
+    headers: isForm ? {} : { 'Content-Type': 'application/json' },
+    body: isForm ? body : JSON.stringify(body),
     credentials: 'include',
   });
 

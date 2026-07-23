@@ -53,6 +53,24 @@ function outputModalities(m) {
   return out.split('+').map((s) => s.trim()).filter(Boolean);
 }
 
+function inputModalities(m) {
+  const arch = m.architecture || {};
+  if (Array.isArray(arch.input_modalities) && arch.input_modalities.length) {
+    return arch.input_modalities;
+  }
+  const mod = String(arch.modality || '');
+  const inp = mod.includes('->') ? mod.split('->')[0] : mod;
+  return inp.split('+').map((s) => s.trim()).filter(Boolean);
+}
+
+// Whether a model id accepts image input (vision). Used to gate the attach
+// control and to reject image sends to text-only models.
+export async function modelSupportsImageInput(modelId) {
+  const data = await rawModels();
+  const m = data.find((x) => x.id === modelId);
+  return m ? inputModalities(m).includes('image') : false;
+}
+
 // Returns a trimmed, client-safe model list filtered by output modality.
 // modality: 'text' (default) | 'image' | 'video' | 'all'.
 export async function listModels(modality = 'text') {
@@ -76,6 +94,7 @@ export async function listModels(modality = 'text') {
         image: m.pricing?.image ?? null,
       },
       outputModalities: outputModalities(m),
+      inputModalities: inputModalities(m),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }

@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import path from 'node:path';
 
 // Central place to read + validate environment configuration.
 
@@ -40,4 +41,16 @@ export const config = {
   openrouterBaseUrl: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
   openrouterTitle: process.env.OPENROUTER_APP_TITLE || 'mmchat',
   openrouterReferer: process.env.OPENROUTER_APP_URL || '',
+
+  // Local media storage (uploaded input now; generated output in Step 7). Files
+  // live under storageDir/<userId>/; the dir is gitignored.
+  storageDir: process.env.STORAGE_DIR
+    ? path.resolve(process.env.STORAGE_DIR)
+    : path.resolve(process.cwd(), 'storage'),
+  // 5 GB per-user local cap, with an in-app notice at 3.5 GB (bible thresholds).
+  maxLocalBytes: Number(process.env.MAX_LOCAL_BYTES || 5 * 1024 * 1024 * 1024),
+  noticeLocalBytes: Number(process.env.NOTICE_LOCAL_BYTES || 3.5 * 1024 * 1024 * 1024),
+  // Per-attachment upload ceiling (bytes) and max attachments per message.
+  maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES || 20 * 1024 * 1024),
+  maxAttachments: Number(process.env.MAX_ATTACHMENTS || 6),
 };

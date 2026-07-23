@@ -6,6 +6,7 @@ import { streamMessage } from '../chat/stream.js';
 import ModelPicker from '../chat/ModelPicker.jsx';
 
 const MODALITIES = ['text', 'image', 'video'];
+const MAX_ATTACH = 6;
 
 // Simple per-browser persistence for the provider-routing toggles.
 const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
@@ -35,6 +36,11 @@ export default function ChatPage() {
   const [error, setError] = useState(null); // { category, message }
   const [pickerOpen, setPickerOpen] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+
+  // attachments (image input) — array of { file, url, name, type }
+  const [attachments, setAttachments] = useState([]);
+  const [visionSupported, setVisionSupported] = useState(false);
+  const fileInputRef = useRef(null);
 
   // provider routing
   const [sort, setSort] = useState(() => lsGet('mmchat.sort', 'price'));
@@ -67,6 +73,19 @@ export default function ChatPage() {
   useEffect(() => {
     if (chat) { setTitle(chat.title || ''); setModality(chat.modality); setEditErr(''); }
   }, [chat?.id, editing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Does the current model accept image input? Gates the attach control.
+  useEffect(() => {
+    if (!chat?.modelId) { setVisionSupported(false); return; }
+    let alive = true;
+    api(`/models/capabilities?id=${encodeURIComponent(chat.modelId)}`)
+      .then((r) => { if (alive) setVisionSupported(!!r.supportsImageInput); })
+      .catch(() => { if (alive) setVisionSupported(false); });
+    return () => { alive = false; };
+  }, [chat?.modelId]);
+
+  // Clear staged attachments when switching chats.
+  useEffect(() => { setAttachments([]); }, [chatId]);
 
   // Keep the thread scrolled to the newest content.
   useEffect(() => {
@@ -117,9 +136,32 @@ export default function ChatPage() {
     }
   }
 
+  function onPickFiles(e) {
+    const chosen = Array.from(e.target.files || []);
+    e.target.value = ''; // let the same file be re-picked later
+    if (!chosen.length) return;
+    const images = chosen.filter((f) => f.type.startsWith('image/'));
+    const room = Math.max(0, MAX_ATTACH - attachments.length);
+    const next = images.slice(0, room).map((f) => ({ file: f, url: URL.createObjectURL(f), name: f.name, type: f.type }));
+    setAttachments((a) => [...a, ...next]);
+    if (images.length < chosen.length) {
+      setError({ category: 'request', message: 'Only image files can be attached.' });
+    }
+  }
+
+  function removeAttachment(idx) {
+    setAttachments((a) => {
+      const removed = a[idx];
+      if (removed) URL.revokeObjectURL(removed.url);
+      return a.filter((_, i) => i !== idx);
+    });
+  }
+
   async function send() {
+    if (streaming) return;
     const content = input.trim();
-    if (!content || streaming) return;
+    const files = attachments;
+    if (!content && files.length === 0) return;
     if (chat.modality !== 'text') {
       setError({ category: 'model', message: 'Only text chats can send messages yet.' });
       return;
@@ -128,16 +170,40 @@ export default function ChatPage() {
       setError({ category: 'model', message: 'Choose a model first.' });
       return;
     }
+    if (files.length && !visionSupported) {
+      setError({ category: 'model', message: 'This model does not accept image input. Choose a vision-capable model.' });
+      return;
+    }
     setError(null);
+
+    // Optimistic bubble reuses the local preview URLs (kept valid this session).
+    const previews = files.map((a) => ({ url: a.url, contentType: a.type, name: a.name }));
     setInput('');
+    setAttachments([]);
     const tempId = `temp-${Date.now()}`;
-    setMessages((m) => [...m, { id: tempId, role: 'user', content }]);
+    setMessages((m) => [...m, { id: tempId, role: 'user', content, attachments: previews }]);
     setStreaming(true);
     setStreamingText('');
     let acc = '';
+
+    let body;
+    if (files.length) {
+      body = new FormData();
+      body.append('content', content);
+      body.append('sort', sort);
+      body.append('privacy', String(privacy));
+      for (const a of files) body.append('files', a.file);
+    } else {
+      body = { content, sort, privacy };
+    }
+
     try {
-      await streamMessage(chat.id, { content, sort, privacy }, {
-        onUser: (e) => setMessages((m) => m.map((x) => (x.id === tempId ? { ...x, id: e.id } : x))),
+      await streamMessage(chat.id, body, {
+        onUser: (e) => setMessages((m) => m.map((x) => (
+          x.id === tempId
+            ? { ...x, id: e.id, attachments: e.attachments?.length ? e.attachments : x.attachments }
+            : x
+        ))),
         onDelta: (t) => { acc += t; setStreamingText(acc); },
         onError: (e) => {
           setError({ category: e.category, message: e.message });
@@ -242,7 +308,19 @@ export default function ChatPage() {
             {messages.map((m) => (
               <div key={m.id} className={`msg ${m.role}`}>
                 <div className="msg-role">{m.role}</div>
-                <div className="msg-content">{m.content}</div>
+                {m.attachments?.length > 0 && (
+                  <div className="msg-attachments">
+                    {m.attachments.map((att) => (
+                      <img
+                        key={att.id || att.url}
+                        src={att.url}
+                        alt={att.name || 'attachment'}
+                        className="msg-image"
+                      />
+                    ))}
+                  </div>
+                )}
+                {m.content && <div className="msg-content">{m.content}</div>}
                 {m.role === 'assistant' && fmtCost(m.costUsd) && (
                   <div className="msg-cost muted small" title="Approximate cost billed to your OpenRouter key">
                     {fmtCost(m.costUsd)}
@@ -270,18 +348,48 @@ export default function ChatPage() {
       )}
 
       {/* composer */}
-      <div className="composer">
-        <textarea
-          rows={2}
-          placeholder={chat.modelId ? 'Type a message…  (Enter to send, Shift+Enter for newline)' : 'Choose a model first…'}
-          value={input}
-          disabled={streaming}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onComposerKey}
-        />
-        <button onClick={send} disabled={streaming || !input.trim()}>
-          {streaming ? 'Sending…' : 'Send'}
-        </button>
+      <div className="composer-wrap">
+        {attachments.length > 0 && (
+          <div className="attach-chips">
+            {attachments.map((a, i) => (
+              <div key={a.url} className="chip">
+                <img src={a.url} alt="" className="chip-thumb" />
+                <span className="chip-name">{a.name}</span>
+                <button className="chip-x" aria-label="Remove attachment" onClick={() => removeAttachment(i)}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="composer">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={onPickFiles}
+          />
+          <button
+            className="attach-btn"
+            title={visionSupported ? 'Attach image(s)' : 'This model does not accept image input'}
+            aria-label="Attach image"
+            disabled={!visionSupported || streaming || attachments.length >= MAX_ATTACH}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            📎
+          </button>
+          <textarea
+            rows={2}
+            placeholder={chat.modelId ? 'Type a message…  (Enter to send, Shift+Enter for newline)' : 'Choose a model first…'}
+            value={input}
+            disabled={streaming}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onComposerKey}
+          />
+          <button onClick={send} disabled={streaming || (!input.trim() && attachments.length === 0)}>
+            {streaming ? 'Sending…' : 'Send'}
+          </button>
+        </div>
       </div>
 
       {pickerOpen && (
