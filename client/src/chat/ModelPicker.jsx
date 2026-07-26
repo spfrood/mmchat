@@ -3,11 +3,36 @@ import { api } from '../api.js';
 
 // Format an OpenRouter per-token USD price string as $/million tokens.
 function perMillion(price) {
+  if (price == null || price === '') return null; // absent ≠ free
   const n = Number(price);
   if (!Number.isFinite(n)) return null;
   if (n === 0) return 'free';
   const m = n * 1_000_000;
   return `$${m >= 1 ? m.toFixed(2) : m.toPrecision(2)}/M`;
+}
+
+// USD with enough precision for small rates ($0.0000 is useless); never exponential.
+function fmtUsd(v) {
+  if (v >= 0.01) return `$${v.toFixed(2)}`;
+  if (v >= 0.0001) return `$${v.toFixed(4)}`;
+  return `$${v.toFixed(6)}`;
+}
+
+// Short label for an image billing unit (e.g. "megapixel" → "MP").
+function imgUnit(u) {
+  if (!u) return 'image';
+  const s = String(u).toLowerCase();
+  if (s.includes('megapixel') || s === 'mp') return 'MP';
+  if (s.includes('token')) return 'token';
+  if (s.includes('image')) return 'image';
+  return s;
+}
+
+// Image rate for the picker: per-token models are metered (a tiny per-token
+// number is meaningless to compare), so label them rather than print a figure.
+function imgRate(cost, unit) {
+  if (String(unit || '').toLowerCase().includes('token')) return 'per-token (metered)';
+  return Number.isFinite(cost) && cost > 0 ? `from ${fmtUsd(cost)}/${imgUnit(unit)}` : null;
 }
 
 function priceLabel(p) {
@@ -16,30 +41,33 @@ function priceLabel(p) {
   const completion = perMillion(p.completion);
   if (prompt) parts.push(`in ${prompt}`);
   if (completion) parts.push(`out ${completion}`);
-  const img = Number(p.image);
-  if (Number.isFinite(img) && img > 0) parts.push(`img $${img.toFixed(4)}`);
+  const imgLabel = imgRate(Number(p.image), p.imageUnit);
+  if (imgLabel) parts.push(imgLabel);
+  const vid = Number(p.video);
+  if (Number.isFinite(vid) && vid > 0) parts.push(`from ${fmtUsd(vid)}/sec`);
   return parts.length ? parts.join(' · ') : 'pricing n/a';
 }
 
 // Modal model picker. Fetches the live catalogue for the chosen modality and
 // filters client-side by a text search over name/id/description.
 export default function ModelPicker({ modality = 'text', currentModelId, onSelect, onClose }) {
-  const [mod, setMod] = useState(modality);
   const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [q, setQ] = useState('');
 
+  // The picker only ever shows models for THIS chat's modality — a mismatched
+  // pick just errors on send, so it isn't offered. The type is fixed by the chat.
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setError('');
-    api(`/models?modality=${mod}`)
+    api(`/models?modality=${modality}`)
       .then((res) => { if (alive) setModels(res.models); })
       .catch((err) => { if (alive) setError(err.message || 'Failed to load models'); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [mod]);
+  }, [modality]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -56,24 +84,18 @@ export default function ModelPicker({ modality = 'text', currentModelId, onSelec
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <h2>Choose a model</h2>
+          <h2>Choose a {modality} model</h2>
           <button className="close-x" title="Close" aria-label="Close" onClick={onClose}>✕</button>
         </div>
 
         <div className="picker-filters">
           <input
             type="text"
-            placeholder="Search models…"
+            placeholder={`Search ${modality} models…`}
             value={q}
             autoFocus
             onChange={(e) => setQ(e.target.value)}
           />
-          <select value={mod} onChange={(e) => setMod(e.target.value)} title="Filter by output modality">
-            <option value="text">text</option>
-            <option value="image">image</option>
-            <option value="video">video</option>
-            <option value="all">all</option>
-          </select>
         </div>
 
         <div className="model-list">
@@ -100,6 +122,11 @@ export default function ModelPicker({ modality = 'text', currentModelId, onSelec
             </button>
           ))}
         </div>
+
+        <p className="picker-disclaimer muted small">
+          Prices are estimates and <strong>may be inaccurate</strong> — verify on{' '}
+          <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer">openrouter.ai</a> before relying on them.
+        </p>
       </div>
     </div>
   );

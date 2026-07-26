@@ -29,7 +29,7 @@ function truthy(v) {
   return v === true || v === 'true';
 }
 
-async function loadOwnedChat(chatId, userId) {
+export async function loadOwnedChat(chatId, userId) {
   const { rows } = await pool.query(
     `SELECT id, title, model_id, modality FROM chats WHERE id = $1 AND user_id = $2`,
     [chatId, userId],
@@ -37,7 +37,7 @@ async function loadOwnedChat(chatId, userId) {
   return rows[0] || null;
 }
 
-function mediaView(m) {
+export function mediaView(m) {
   return {
     id: m.id,
     direction: m.direction,
@@ -53,7 +53,8 @@ export async function listMessages(req, res) {
     const chat = await loadOwnedChat(req.params.id, req.session.userId);
     if (!chat) return res.status(404).json({ error: 'Chat not found' });
     const { rows } = await pool.query(
-      `SELECT id, role, content, content_type, cost_usd, created_at
+      `SELECT id, role, content, content_type, cost_usd, created_at,
+              metadata ->> 'status' AS status
          FROM messages WHERE chat_id = $1 ORDER BY created_at ASC`,
       [chat.id],
     );
@@ -77,6 +78,7 @@ export async function listMessages(req, res) {
         content: m.content,
         contentType: m.content_type,
         costUsd: m.cost_usd,
+        status: m.status,
         createdAt: m.created_at,
         attachments: byMsg.get(m.id) || [],
       })),

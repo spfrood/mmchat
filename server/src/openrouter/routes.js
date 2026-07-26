@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth/middleware.js';
-import { listModels, modelSupportsImageInput } from './client.js';
+import { listModels, modelSupportsImageInput, modelImagePricing, modelVideoPrice } from './client.js';
 
 // /api/models — the live OpenRouter model catalogue for the picker. Public data
 // (no user key needed), but gated behind a session. Default modality is text.
@@ -27,10 +27,20 @@ modelsRouter.get('/capabilities', async (req, res) => {
   const id = String(req.query.id || '');
   if (!id) return res.status(400).json({ error: 'id is required' });
   try {
-    const supportsImageInput = await modelSupportsImageInput(id);
-    res.json({ id, supportsImageInput });
+    const [supportsImageInput, imagePricing, videoPrice] = await Promise.all([
+      modelSupportsImageInput(id),
+      modelImagePricing(id),
+      modelVideoPrice(id),
+    ]);
+    res.json({
+      id,
+      supportsImageInput,
+      imagePrice: imagePricing?.cost ?? null,
+      imageUnit: imagePricing?.unit ?? null,
+      videoPrice,
+    });
   } catch (err) {
     console.error('[models] capabilities failed:', err.message);
-    res.json({ id, supportsImageInput: false });
+    res.json({ id, supportsImageInput: false, imagePrice: null, imageUnit: null, videoPrice: null });
   }
 });

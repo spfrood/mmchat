@@ -329,6 +329,9 @@ button.danger { background: transparent; color: var(--error); border: 1px solid 
   max-width: 100%;
 }
 .model-select:hover { border-color: var(--accent); }
+.model-select:disabled { cursor: not-allowed; opacity: 0.85; }
+.model-select:disabled:hover { border-color: var(--border); }
+.model-lock { font-size: 0.82em; opacity: 0.75; }
 .model-current { font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; }
 .provider-controls { display: flex; align-items: center; gap: 0.75rem; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -501,3 +504,74 @@ html, body, #root { height: 100%; }
   vertical-align: middle;
 }
 .badge.vision { background: rgba(109, 140, 255, 0.18); color: var(--accent); border: 1px solid var(--accent); }
+
+/* ── image/video billing chip: compact in the model bar, expands on hover ── */
+.cost-note-compact {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;          /* match the model-select button height */
+  display: flex;
+  align-items: center;
+  padding: 0 0.6rem;
+  background: #2a2410;
+  border: 1px solid #6b5a1f;
+  border-radius: 8px;
+  color: #f0e0a8;
+  font-size: 0.76rem;
+  cursor: help;
+  /* no overflow:hidden here — it would clip the hover panel below the chip */
+}
+.cnc-summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto; }
+.cnc-notice { color: #ff4d4d; font-weight: 800; letter-spacing: 0.03em; margin-right: 0.45rem; }
+.cnc-full {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  background: #2a2410;
+  border: 1px solid #6b5a1f;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  line-height: 1.5;
+  white-space: normal;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.cost-note-compact:hover .cnc-full,
+.cost-note-compact:focus .cnc-full,
+.cost-note-compact:focus-within .cnc-full { display: block; }
+.cnc-disclaimer { margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px solid #6b5a1f; }
+.cnc-full a, .picker-disclaimer a { color: #ffd873; text-decoration: underline; }
+
+.picker-disclaimer { margin: 0; padding: 0.55rem 1.25rem; border-top: 1px solid var(--border); }
+
+/* ── Step 6: video output + async pending + confirm dialog ──── */
+.msg-video {
+  max-width: 360px; width: 100%; height: auto;
+  border: 1px solid var(--border); border-radius: 8px; display: block;
+  background: #000;
+}
+.error-inline {
+  color: var(--error);
+  background: rgba(255, 90, 90, 0.08);
+  border: 1px solid var(--error);
+  border-radius: 8px;
+  padding: 0.45rem 0.65rem;
+}
+
+.modal.confirm { max-width: 460px; }
+.confirm-body { padding: 1rem 1.25rem; line-height: 1.5; }
+.confirm-body p { margin: 0 0 0.7rem; }
+.confirm-facts { list-style: none; margin: 0 0 0.7rem; padding: 0.6rem 0.8rem; background: var(--panel-2, rgba(255,255,255,0.03)); border: 1px solid var(--border); border-radius: 8px; }
+.confirm-facts li { margin: 0.15rem 0; }
+.confirm-facts code { font-size: 0.85em; word-break: break-all; }
+.confirm-body .warn, p.warn {
+  margin: 0 0 0.7rem; padding: 0.5rem 0.7rem;
+  background: #2a2410; border: 1px solid #6b5a1f; border-radius: 8px; color: #f0e0a8;
+}
+.modal.confirm .row-btns { padding: 0 1.25rem 1.25rem; margin-top: 0.5rem; }
+button.danger-solid { background: var(--error); color: #fff; border: 1px solid var(--error); }
+button.danger-solid:hover { filter: brightness(1.08); }
+button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }

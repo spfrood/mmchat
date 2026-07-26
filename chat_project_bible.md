@@ -373,15 +373,16 @@ what's actually been spent, not prevention of overspend.
 
 ## Open Items — Verify Before/During Build
 
-- OpenRouter video generation: confirm whether completion is delivered via
-  webhook push or requires client-side polling (`video.generation.completed`
-  event was referenced in OpenRouter's docs but the delivery mechanism wasn't
-  confirmed in this planning session)
-- OpenRouter output URL expiry behavior — confirm per-provider if possible,
-  though the build should proceed on the safe assumption (fetch immediately)
-  regardless
+- ✅ **RESOLVED (Step 6).** OpenRouter video generation completion: it's
+  **asynchronous, polled** — `POST /api/v1/videos` returns `202 {id,
+  polling_url, status}`, then `GET /api/v1/videos/{id}` is polled to terminal
+  status. A `callback_url` webhook exists but is **not used**. See
+  "Implementation Notes & Deviations → Video generation" below.
+- ✅ **RESOLVED (Steps 5–6).** Output URL expiry: build proceeds on the safe
+  "fetch immediately" assumption for both image and video output (implemented).
 - IDrive: confirm whether any current API supports third-party write access to
-  the consumer product, if you want to revisit adding it later
+  the consumer product, if you want to revisit adding it later (still open —
+  future cloud-storage work).
 
 ## Suggested Build Order
 
@@ -395,3 +396,101 @@ what's actually been spent, not prevention of overspend.
    upload-on-generate)
 8. WebDAV fallback (optional, defer until needed)
 9. Settings/account menu, credits display, account deletion
+
+---
+
+## Implementation Notes & Deviations (as built through Step 6)
+
+This section records where the **built** app diverges from, clarifies, or adds
+to the original spec above. The spec captured intent during planning; these are
+the facts discovered during the build. When the two disagree, this section wins
+for anything through Step 6.
+
+### Model catalogues — separate endpoints per modality
+
+The "Model Picker" spec assumes one list (`GET /api/v1/models`, filtered by
+`output_modalities`). In reality only **text** models come from there:
+
+- **Text** → `GET /api/v1/models` (filtered to text output). *On spec.*
+- **Image** → dedicated **`GET /api/v1/images/models`** (~48 models). The main
+  `/models` list only tags ~3 models as image-output, so filtering it misses
+  almost everything. `output_modalities=image` is **not** how image-gen models
+  are found.
+- **Video** → dedicated **`GET /api/v1/videos/models`**. `output_modalities=video`
+  is **not** a thing; video models are only on this endpoint.
+
+The picker is also **locked to the chat's modality** (no in-picker modality
+selector) — a mismatched pick only errors on send, so it isn't offered. The
+optional keyword "specialty filter" (coding/vision/reasoning) was **not built**.
+
+### Pricing — source, units, and accuracy
+
+The spec assumes pricing is always in the `/models` response ("no extra API
+call"). True for text only:
+
+- **Text**: per-token pricing on `/models`. *On spec.*
+- **Video**: `pricing_skus` on `/videos/models`, billed **per video-second**;
+  keys carry units and some are in **cents** (e.g.
+  `cents_per_video_output_second_480p`). We show the cheapest per-second tier as
+  "from $X/sec".
+- **Image**: **not in the list response.** Pricing is on a per-model
+  sub-endpoint **`GET /api/v1/images/models/{id}/endpoints`** as billable items
+  `{billable, unit, cost_usd}`. Units vary — **per image, per megapixel, or per
+  token**. This requires **extra per-model calls** (concurrency-limited +
+  5-min cached), contradicting the "no extra API call" assumption. Per-token
+  models are shown as "metered" (no meaningful per-image figure).
+- All picker/chip prices are labeled **estimates** with a "verify on
+  openrouter.ai" disclaimer.
+
+### `messages.cost_usd` — prefer OpenRouter's reported cost
+
+The spec describes `cost_usd` as a self-computed estimate. As built we **prefer
+OpenRouter's returned `usage.cost`** (the actual per-request charge) for text,
+image, and video, and only fall back to a computed estimate when it's absent —
+and only when cleanly computable (per-image, not per-MP/per-token). This is more
+accurate than the pure-estimate model the spec described.
+
+### Video generation — async, polled, reconciled (no webhook)
+
+- Flow: `POST /api/v1/videos` → `202 {id, polling_url, status}`; the assistant
+  message is stored `pending` with `jobId`/`pollingUrl`/`jobStatus` in
+  `metadata` and `content_type='video'`. Completion is driven by **polling +
+  reconciliation**, never a webhook (a `callback_url` exists but is unused — no
+  public callback endpoint behind the reverse proxy).
+- Reconcile endpoint re-checks each pending job; on `completed` it fetches
+  `unsigned_urls[]` (download requires the bearer key) and persists bytes
+  immediately, sets `cost_usd` from `usage.cost`, bumps the storage counter; on
+  `failed`/`cancelled`/`expired` it marks the message failed. The client polls
+  reconcile every ~12s **and** on chat load.
+
+### Spend protection — how it's enforced
+
+- **One pending generation per chat**: a Postgres **partial unique index**
+  (migration `003_pending_generation_guard.sql`) on `messages(chat_id) WHERE
+  role='assistant' AND metadata->>'status'='pending'`. Covers image **and**
+  video atomically (blocks double-submit / reload re-fire).
+- **Concurrent video cap** per user: `MAX_CONCURRENT_VIDEOS` (default 2),
+  enforced inside a transaction guarded by a **Postgres advisory lock** to avoid
+  races across chats.
+- **Pre-flight credit check** via `GET /api/v1/auth/key` surfaced in the video
+  **confirmation dialog** (warns if an example 8-second clip would use ≥20% of
+  remaining credits). Informational, not a hard block.
+- Video submit button stays disabled while a job is **pending in that chat**
+  (not just during the brief async submit), including after reload.
+
+### Chat model/type locking + new-chat flow (added, not in original spec)
+
+- A chat's **model is fixed once it has any messages** (UI lock + server 400).
+  The initial pick and idempotent same-value writes are still allowed.
+- A chat's **type (modality) is fixed once it has messages** (UI lock + server
+  400); title edits are still allowed. Changing type on an **empty** chat
+  **clears the selected model** (it would otherwise be a mismatch).
+- **New-chat flow**: creating a chat opens the name/type editor by default and
+  **hides the model picker until the chat's name/type is saved** — set up the
+  chat, then pick a model, then send (which locks it).
+
+### Local storage
+
+- Generated **video** output reuses the same local-storage mechanism as images;
+  video mime types (mp4/webm/mov/mkv) are handled. `isSupportedImage()` stays
+  image-only (uploads are image input only; video is output only).

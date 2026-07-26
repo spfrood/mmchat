@@ -4,13 +4,15 @@ import { useChats } from './ChatsContext.jsx';
 // Flat list of the user's chats + a "new chat" button. The collapse/expand
 // toggle is owned by ChatLayout and passed in.
 export default function Sidebar({ collapsed, onToggle }) {
-  const { chats, loading, createChat, toggleEditor } = useChats();
+  const { chats, loading, createChat, openEditor, toggleEditor } = useChats();
   const navigate = useNavigate();
 
   async function handleNewChat() {
     try {
       const chat = await createChat({ modality: 'text' });
       navigate(`/chat/${chat.id}`);
+      // Open the name/type editor by default so a fresh chat is ready to set up.
+      openEditor(chat.id);
     } catch {
       // createChat surfaces errors in the pane; keep the sidebar quiet.
     }

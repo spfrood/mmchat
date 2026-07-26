@@ -156,6 +156,12 @@ app — take your time testing this one.
 > When done, stop and tell me how to test this end-to-end with a real
 > OpenRouter key. Wait for my confirmation before starting Step 4.
 
+**As built (deviations):** the model picker is **locked to the chat's modality**
+(the in-picker modality selector was removed — a mismatch only errors on send);
+the optional "specialty filter" was not built; all displayed prices are labeled
+**estimates** ("verify on openrouter.ai"). A chat's **model locks once it has
+messages** (UI + server). See the bible's "Implementation Notes & Deviations".
+
 **You test:**
 - [ ] Model picker loads real models, search and modality filter work
 - [ ] Pricing displayed matches what's on openrouter.ai for a couple of models you spot-check
@@ -217,6 +223,12 @@ app — take your time testing this one.
 > When done, stop and tell me how to test this. Wait for my confirmation
 > before starting Step 6.
 
+**As built (deviations):** image models come from a dedicated
+`GET /api/v1/images/models` endpoint (~48 models), **not** `output_modalities=image`
+on `/models`. Pricing is **not** in that list — it's fetched per-model from
+`GET /api/v1/images/models/{id}/endpoints`, with units that vary (per image /
+per megapixel / per token). See the bible's "Implementation Notes & Deviations".
+
 **You test:**
 - [ ] Generate an image from a real prompt, confirm it renders in the chat
 - [ ] Confirm the file actually exists on disk, not just a link to OpenRouter's URL
@@ -258,6 +270,14 @@ in need of careful testing given real spend is involved.
 > mechanism, and how to test this. Wait for my confirmation before starting
 > Step 7 — this step involves real spend, so take your time testing it.
 
+**As built (deviations):** video is **async/polled** — `POST /api/v1/videos` →
+`202 {id, polling_url, status}`, polled via `GET /api/v1/videos/{id}`; the
+`callback_url` webhook is **not** used (polling + on-load reconciliation instead).
+Video models come from `GET /api/v1/videos/models` (**not** `output_modalities=video`);
+pricing is `pricing_skus` per **video-second** (some keys in cents). Concurrent-video
+cap = `MAX_CONCURRENT_VIDEOS` (default 2). See the bible's "Implementation Notes &
+Deviations".
+
 **You test:**
 - [ ] Generate a video, confirm the confirmation dialog appears first
 - [ ] Confirm the job shows a clear "pending/processing" state, not a blank/broken UI, while waiting
@@ -275,27 +295,53 @@ carefully.**
 
 ## Step 7 — Local Storage Accounting
 
-**Goal**: 5GB cap enforcement, 3.5GB notice threshold.
+**Goal**: finish local storage accounting. The write-side counter and 5 GB hard
+cap already exist (built incrementally across Steps 4–6); this step adds the
+missing **decrement on delete**, the **3.5 GB notice**, and the **settings
+display** — and reconciles any counter drift the missing decrement caused.
 
 **Prompt:**
-> Read `chat_project_bible.md` — the "Storage" section (local cap portion
-> only, not cloud linking yet). Build:
-> - `users.storage_used_bytes` running counter, updated on `media_files`
->   insert/delete where `storage_location = 'local'`.
-> - In-app notification when a user crosses 3.5GB used.
-> - Hard stop at 5GB: new local media writes blocked with a clear error
->   message, existing chats/text still fully usable.
-> - A storage-used display in settings (used vs. 5GB cap).
+> Read `chat_project_bible.md` — the "Storage" section (local cap portion only,
+> not cloud linking yet) and the "Implementation Notes & Deviations → Local
+> storage" note.
 >
-> When done, stop and tell me how to test threshold behavior without
-> actually generating 5GB of real media. Wait for my confirmation before
-> starting Step 8.
+> **Already built (do NOT rebuild):** `users.storage_used_bytes` is incremented
+> and the 5 GB hard cap is pre-flight-enforced on all three local write paths —
+> image-input uploads, image generation, and video generation. `NOTICE_LOCAL_BYTES`
+> (3.5 GB) and `MAX_LOCAL_BYTES` (5 GB) already exist in config.
+>
+> Build the missing pieces:
+> - **Decrement the counter on delete.** Nothing currently decreases
+>   `storage_used_bytes`, so deleting a chat (which cascades `media_files` via FK)
+>   leaves the counter overstated. Make every path that removes local
+>   `media_files` rows also subtract their `size_bytes` from the owner's counter —
+>   chat delete, plus any message/media delete — for `storage_location = 'local'`
+>   only. FK cascade won't run app code, so handle this explicitly (sum the
+>   affected rows and decrement in the same transaction, or a DB trigger — your
+>   call), and delete the underlying files from disk too.
+> - **Reconcile existing drift.** Provide a one-off recompute (CLI script or
+>   admin route) that resets each user's `storage_used_bytes` to the true sum of
+>   their local `media_files.size_bytes` — earlier testing likely already skewed
+>   counters given the missing decrement.
+> - **3.5 GB notice — persistent, on every path.** Today a transient
+>   `storageNotice` flag is emitted only on the text-upload SSE path. Replace it
+>   with a consistent in-app notification shown whenever a user is at or above
+>   3.5 GB, regardless of how they got there (upload / image / video), and
+>   visible **on load** — not just in the response to the write that crossed it.
+> - **Settings storage-used display**: used vs. 5 GB cap (bar + "X.X GB of 5 GB"),
+>   reading the counter.
+> - Leave the existing 5 GB hard stop as-is (blocked writes with a clear message,
+>   text/existing chats still usable) — just confirm it still holds after the above.
+>
+> When done, stop and tell me how to test threshold behavior without actually
+> generating 5 GB of real media. Wait for my confirmation before starting Step 8.
 
 **You test:**
-- [ ] Confirm the storage-used display in settings matches reality (sum of actual file sizes on disk for that user)
-- [ ] Artificially push a test account's counter near 3.5GB (via whatever test method Claude Code suggests) — confirm the notification appears
-- [ ] Push past 5GB — confirm new generations are blocked with a clear message, and confirm existing chats/text still work normally
-- [ ] Delete some media, confirm the counter decreases and the block lifts appropriately
+- [ ] Storage-used display in settings matches reality (sum of actual file sizes on disk for that user)
+- [ ] Artificially push a test account's counter near 3.5GB — confirm the notice appears, and still appears after a page reload (not just once, right after a write)
+- [ ] Push past 5GB — confirm new generations/uploads are blocked with a clear message, and existing chats/text still work normally
+- [ ] Delete some media **and** delete a whole chat that has media — confirm the counter decreases by the right amount, the files are gone from disk, and the block lifts appropriately
+- [ ] Run the reconcile/recompute against an account with a deliberately-skewed counter — confirm it resets to the true on-disk total
 
 **Do not proceed to Step 8 until all of the above are confirmed.**
 

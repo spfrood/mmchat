@@ -14,6 +14,7 @@ export function ChatsProvider({ children }) {
   const toggleEditor = useCallback((id) => {
     setEditingChatId((prev) => (prev === id ? null : id));
   }, []);
+  const openEditor = useCallback((id) => setEditingChatId(id), []);
   const closeEditor = useCallback(() => setEditingChatId(null), []);
 
   const refresh = useCallback(async () => {
@@ -58,7 +59,7 @@ export function ChatsProvider({ children }) {
     <ChatsContext.Provider
       value={{
         chats, loading, refresh, createChat, updateChat, deleteChat,
-        editingChatId, toggleEditor, closeEditor,
+        editingChatId, toggleEditor, openEditor, closeEditor,
       }}
     >
       {children}

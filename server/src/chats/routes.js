@@ -4,6 +4,8 @@ import { pool } from '../db.js';
 import { config } from '../config.js';
 import { requireAuth } from '../auth/middleware.js';
 import { listMessages, sendMessage } from './completion.js';
+import { generateImage } from './imagegen.js';
+import { submitVideoJob, reconcileVideos } from './videogen.js';
 
 // Attachments are held in memory (small images) so we can both base64-embed them
 // in the OpenRouter request and write them to local storage. multer only parses
@@ -128,15 +130,63 @@ chatsRouter.patch('/:id', async (req, res) => {
     vals.push(cleanTitle(body.title));
   }
   if ('modelId' in body) {
-    sets.push(`model_id = $${i++}`);
-    vals.push(cleanModelId(body.modelId));
+    // The model is fixed once a chat has a thread — the history belongs to the
+    // model that produced it. Allow the initial pick (no messages yet) and
+    // idempotent same-value writes; reject an actual change afterward.
+    try {
+      const { rows: info } = await pool.query(
+        `SELECT c.model_id,
+                (SELECT count(*) FROM messages m WHERE m.chat_id = c.id) AS msg_count
+           FROM chats c WHERE c.id = $1 AND c.user_id = $2`,
+        [req.params.id, req.session.userId],
+      );
+      if (!info.length) return res.status(404).json({ error: 'Chat not found' });
+      const newModel = cleanModelId(body.modelId);
+      if (Number(info[0].msg_count) > 0 && newModel !== info[0].model_id) {
+        return res.status(400).json({
+          error: 'The model can’t be changed once the chat has messages. Start a new chat to use a different model.',
+          category: 'request',
+        });
+      }
+      sets.push(`model_id = $${i++}`);
+      vals.push(newModel);
+    } catch (err) {
+      if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+      console.error('[chats] model-lock check failed:', err.message);
+      return res.status(500).json({ error: 'Failed to update chat' });
+    }
   }
   if ('modality' in body) {
     if (!MODALITIES.includes(body.modality)) {
       return res.status(400).json({ error: `modality must be one of: ${MODALITIES.join(', ')}` });
     }
-    sets.push(`modality = $${i++}`);
-    vals.push(body.modality);
+    try {
+      const { rows: cur } = await pool.query(
+        `SELECT c.modality,
+                (SELECT count(*) FROM messages m WHERE m.chat_id = c.id) AS msg_count
+           FROM chats c WHERE c.id = $1 AND c.user_id = $2`,
+        [req.params.id, req.session.userId],
+      );
+      if (!cur.length) return res.status(404).json({ error: 'Chat not found' });
+      const changing = cur[0].modality !== body.modality;
+      // The chat type is fixed once the session is active (has messages) — the
+      // thread belongs to that type. Title edits are still fine.
+      if (changing && Number(cur[0].msg_count) > 0) {
+        return res.status(400).json({
+          error: 'The chat type can’t be changed once the chat has messages. Start a new chat for a different type.',
+          category: 'request',
+        });
+      }
+      sets.push(`modality = $${i++}`);
+      vals.push(body.modality);
+      // Changing type on an empty chat invalidates the current model, so clear
+      // it (skip if the same request also sets modelId, to avoid double-assign).
+      if (changing && !('modelId' in body)) sets.push('model_id = NULL');
+    } catch (err) {
+      if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+      console.error('[chats] modality-change check failed:', err.message);
+      return res.status(500).json({ error: 'Failed to update chat' });
+    }
   }
 
   if (!sets.length) return res.status(400).json({ error: 'No updatable fields provided' });
@@ -162,6 +212,9 @@ chatsRouter.patch('/:id', async (req, res) => {
 // ── messages (thread + send) ────────────────────────────────────────────────
 chatsRouter.get('/:id/messages', listMessages);
 chatsRouter.post('/:id/messages', uploadAttachments, sendMessage);
+chatsRouter.post('/:id/images', generateImage);
+chatsRouter.post('/:id/videos', submitVideoJob);
+chatsRouter.post('/:id/videos/reconcile', reconcileVideos);
 
 // Delete a chat (cascades to its messages via the FK).
 chatsRouter.delete('/:id', async (req, res) => {

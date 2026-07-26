@@ -3,12 +3,14 @@ import { useChats } from '../chat/ChatsContext.jsx';
 
 // The pane shown at "/" — no chat selected yet.
 export default function ChatIndex() {
-  const { createChat } = useChats();
+  const { createChat, openEditor } = useChats();
   const navigate = useNavigate();
 
   async function start() {
     const chat = await createChat({ modality: 'text' });
     navigate(`/chat/${chat.id}`);
+    // Open the name/type editor by default so a fresh chat is set up first.
+    openEditor(chat.id);
   }
 
   return (

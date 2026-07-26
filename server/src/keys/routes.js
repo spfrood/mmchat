@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth/middleware.js';
-import { saveOpenRouterKey, getKeyMeta, deleteKey } from './service.js';
+import { saveOpenRouterKey, getKeyMeta, deleteKey, getDecryptedKey } from './service.js';
+import { getKeyInfo } from '../openrouter/client.js';
 
 // /api/keys — the user's own OpenRouter API key (BYOK). All routes require a
 // fully-authenticated session; every query is scoped to req.session.userId.
@@ -16,6 +17,21 @@ keysRouter.get('/', async (req, res) => {
   } catch (err) {
     console.error('[keys] get failed:', err.message);
     res.status(500).json({ error: 'Failed to load API key status' });
+  }
+});
+
+// Credit / limit info for the user's key, read live from OpenRouter's
+// GET /auth/key. Powers the pre-flight balance check before video generation
+// (and the future profile "view credits" link). The key itself never leaves
+// the server — only the derived numbers are returned.
+keysRouter.get('/credits', async (req, res) => {
+  const key = await getDecryptedKey(req.session.userId);
+  if (!key) return res.status(400).json({ error: 'Add your OpenRouter API key in Settings first.', category: 'key' });
+  try {
+    res.json(await getKeyInfo(key));
+  } catch (err) {
+    console.error('[keys] credits failed:', err.message);
+    res.status(502).json({ error: 'Could not read your key’s credit info from OpenRouter.', category: 'key' });
   }
 });
 

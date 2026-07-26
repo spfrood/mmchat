@@ -53,4 +53,9 @@ export const config = {
   // Per-attachment upload ceiling (bytes) and max attachments per message.
   maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES || 20 * 1024 * 1024),
   maxAttachments: Number(process.env.MAX_ATTACHMENTS || 6),
+
+  // Video generation (async). Cap on concurrent pending video jobs per user —
+  // the Spend Protection backstop (bible); the disabled button + idempotency key
+  // are the primary duplicate-spend guard.
+  maxConcurrentVideos: Number(process.env.MAX_CONCURRENT_VIDEOS || 2),
 };
