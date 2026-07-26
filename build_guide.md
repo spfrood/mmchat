@@ -366,6 +366,16 @@ all three and then test.
 > - On generation (image/video), if this provider is connected and a folder
 >   is assigned, upload there instead of local disk, store only the external
 >   reference in `media_files`, and don't count it against the 5GB cap.
+> - Handle out-of-band deletion (bible: "Out-of-band deletion & manual
+>   verification"). A cloud file the user later deletes directly in the provider
+>   returns not-found when we serve it — flag that `media_files` row
+>   (`unavailable_at`), render "no longer in your cloud storage" instead of a
+>   broken image, and stop re-fetching it (lazy detection). Add a manual "Verify
+>   cloud files" button in settings that walks this provider's `media_files`
+>   rows, checks each is still reachable, and flags the vanished ones. Keep the
+>   rows (history + `cost_usd` must survive) — soft-flag, never hard-delete.
+>   (Recomputing a per-account byte counter comes in Step 9 — there's no
+>   `bytes_used` yet at this step.)
 >
 > When done, stop and tell me how to test the full connect → generate →
 > verify-in-cloud-folder → disconnect flow for this provider specifically.
@@ -375,6 +385,8 @@ all three and then test.
 - [ ] Connect flow completes, folder can be selected/assigned
 - [ ] Generate an image or video with this provider connected — confirm the file actually lands in the correct cloud folder
 - [ ] Confirm this generation does NOT count against the local 5GB cap
+- [ ] Delete a file directly in the cloud provider (out-of-band), then reload the chat — confirm it renders "no longer in your cloud storage", not a broken image or a crash
+- [ ] Run "Verify cloud files" — confirm the out-of-band-deleted file gets flagged and stops showing as present, while its message + cost record remain
 - [ ] Disconnect the provider — confirm past references still show correctly (or degrade gracefully) and new generations fall back to local disk
 - [ ] Reconnect — confirm it doesn't break anything or duplicate stored accounts
 
@@ -401,6 +413,11 @@ one is used first and cap how much of each is consumed.
 >   disk (still subject to the 5GB cap) if none are available.
 > - Track `bytes_used` per `storage_accounts` row, updated on upload/delete,
 >   same denormalized-counter pattern as `users.storage_used_bytes`.
+> - Extend the "Verify cloud files" action (introduced in Step 8) to also
+>   recompute each provider's `bytes_used` from the sum of its still-reachable
+>   `media_files` (excluding rows flagged `unavailable_at`), so quota
+>   enforcement and fallthrough stay honest after out-of-band deletions — the
+>   cloud analogue of Step 7's local recompute utility.
 > - Notice banner: surface an in-app notification when any linked provider
 >   hits its quota, same pattern as the existing 3.5GB local-storage notice.
 >
@@ -413,6 +430,7 @@ one is used first and cap how much of each is consumed.
 - [ ] Set a small quota on the top-priority provider (small enough to hit in testing), confirm uploads fall through to the next provider once it's reached
 - [ ] Confirm the notice banner appears when a provider's quota is hit
 - [ ] Confirm `bytes_used` on each `storage_accounts` row matches reality (sum of files actually sent there)
+- [ ] Delete some files directly in a provider (out-of-band), run "Verify cloud files" — confirm that provider's `bytes_used` drops to the true sum of what's still there, and quota/fallthrough reflects the corrected number
 - [ ] With all linked providers at quota, confirm it correctly falls back to local disk (and respects the 5GB cap there too)
 
 **Do not proceed to Step 10 until all of the above are confirmed.**

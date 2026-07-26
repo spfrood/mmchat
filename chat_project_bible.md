@@ -248,6 +248,46 @@ falls back to local disk, counts against the cap.
   provider type), same denormalized-counter pattern as `users.storage_used_bytes`
   but scoped to the individual `storage_accounts` row — see schema update below.
 
+### Out-of-band deletion & manual verification
+
+Cloud files live in the user's own provider account, so the user can delete them
+directly (in Drive/Dropbox/etc.) without going through this app — a door that
+doesn't exist for local disk, where a file can only be removed through the app.
+When that happens, our `media_files` row and the provider's `bytes_used` counter
+still reference a file that's gone. Two things must degrade gracefully:
+
+- **Serving**: fetching a since-deleted cloud file returns 404/410 from the
+  provider. Render it as "no longer available in your cloud storage" rather than
+  a broken thumbnail — and flag the row so we don't keep re-fetching it.
+- **Accounting**: the vanished file's bytes must stop counting toward that
+  provider's `bytes_used` (and therefore its quota / fallthrough routing).
+
+`media_files` is our local manifest of what should exist where (provider +
+external `file_ref` per row), so reconciliation is a walk over that manifest:
+
+- **Lazy detection (automatic, free):** when a serve/fetch of a cloud file
+  returns not-found, flag that row unavailable (`media_files.unavailable_at`)
+  and stop counting its bytes. No polling — it self-heals whenever the file is
+  next accessed.
+- **Manual "Verify cloud files" button (settings), not an automatic sweep:**
+  walks the connected provider's `media_files` rows, checks each is still
+  reachable, flags the vanished ones, and recomputes the provider's `bytes_used`
+  from the survivors. Chosen over a background auto-scan deliberately — each
+  check is a per-file network round-trip under the provider's rate limits, so a
+  user with a large library would make an auto-sweep slow and quota-hungry. The
+  user triggers it (with progress feedback) when a number looks wrong.
+
+**Soft-flag, never hard-delete the row.** A file gone from the provider keeps
+its `media_files` row (flagged via `unavailable_at`) — the message history still
+references it and `messages.cost_usd` must survive (they still paid OpenRouter to
+generate the output even though they later deleted it). The message renders
+"output no longer in your cloud storage" with the cost record intact.
+
+Eventual consistency is acceptable: the count may briefly overstate after an
+out-of-band delete, then corrects on next access or on manual verify. This
+mirrors the local counter's recompute utility (Step 7) — per-file `size_bytes`
+is ground truth; the counter is a self-healing cache over it.
+
 ## Settings / Account Menu
 
 - Edit profile
@@ -256,7 +296,8 @@ falls back to local disk, counts against the cap.
   chat, computed from `messages.cost_usd`)
 - Cloud storage (connect/disconnect Drive, Dropbox, OneDrive, or configure WebDAV;
   set target folder, priority order, and optional quota per provider;
-  view local storage used vs 5GB cap)
+  view local storage used vs 5GB cap; "verify cloud files" to reconcile stored
+  references against the provider after out-of-band deletions)
 - Delete account
 
 ## Database Schema
@@ -295,10 +336,15 @@ media_files
   id, message_id, direction (input|output),
   storage_location (local|google_drive|dropbox|onedrive|webdav),
   storage_account_id (nullable FK -> storage_accounts.id, set when not local),
-  file_ref, size_bytes, created_at
+  file_ref, size_bytes, unavailable_at (nullable), created_at
   -- direction: input = user-uploaded (vision/file attach), output = generated
   -- storage_account_id identifies which specific linked account got the file,
   -- needed for per-account quota enforcement when multiple providers are linked
+  -- unavailable_at: set when a cloud file is found deleted on the provider side
+  -- (out-of-band) — via lazy detection on serve or the manual "verify cloud
+  -- files" action. The row is kept for history + cost_usd, stops counting toward
+  -- bytes_used, and renders "no longer in your cloud storage". Null for local
+  -- files (local deletion removes the row outright, see Step 7).
 
 storage_accounts
   id, user_id, provider (google_drive|dropbox|onedrive|webdav),
