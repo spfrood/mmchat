@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import { useAuth } from '../auth/AuthContext.jsx';
+import { useStorage, fmtGb } from '../chat/StorageContext.jsx';
 
 // A collapsible settings section: title bar with a ✕ to close it, and a click
 // anywhere on the bar to toggle it back open.
@@ -124,12 +125,59 @@ export default function SettingsPage() {
         {note && <p className="muted small">{note}</p>}
       </Section>
 
+      <Section title="Local storage">
+        <StorageUsage />
+      </Section>
+
       {user.isAdmin && (
         <Section title="Admin — generate an invite">
           <AdminInvites />
         </Section>
       )}
     </div>
+  );
+}
+
+// Local storage used vs. the 5 GB cap. Reads the shared storage status (and
+// refreshes it on open so the figure is current). Generated media and uploaded
+// input both count; text messages don't.
+function StorageUsage() {
+  const { status, refresh } = useStorage();
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  if (!status) return <p className="muted small">Loading…</p>;
+
+  const pct = status.capBytes ? Math.min(100, (status.usedBytes / status.capBytes) * 100) : 0;
+  const fillClass = status.atCap ? 'full' : status.atNotice ? 'warn' : '';
+
+  return (
+    <>
+      <p className="key-status">
+        {fmtGb(status.usedBytes)} of {fmtGb(status.capBytes)} used
+        <span className="muted small"> · {pct.toFixed(0)}%</span>
+      </p>
+      <div className="storage-meter">
+        <div className="storage-bar">
+          <div className={`storage-bar-fill ${fillClass}`} style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+      {status.atCap ? (
+        <p className="error">
+          You've reached the {fmtGb(status.capBytes)} limit. New uploads and image/video
+          generations are blocked until you delete some media. Text and existing chats still work.
+        </p>
+      ) : status.atNotice ? (
+        <p className="muted small">
+          You're past {fmtGb(status.noticeBytes)} — approaching the {fmtGb(status.capBytes)} limit.
+        </p>
+      ) : (
+        <p className="muted small">
+          Generated media and uploaded images count toward this limit; text messages don't.
+          Deleting a chat frees the media it held.
+        </p>
+      )}
+    </>
   );
 }
 

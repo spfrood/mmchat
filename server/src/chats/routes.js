@@ -6,6 +6,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { listMessages, sendMessage } from './completion.js';
 import { generateImage } from './imagegen.js';
 import { submitVideoJob, reconcileVideos } from './videogen.js';
+import { deleteChatAndReleaseMedia } from '../storage/accounting.js';
 
 // Attachments are held in memory (small images) so we can both base64-embed them
 // in the OpenRouter request and write them to local storage. multer only parses
@@ -216,14 +217,14 @@ chatsRouter.post('/:id/images', generateImage);
 chatsRouter.post('/:id/videos', submitVideoJob);
 chatsRouter.post('/:id/videos/reconcile', reconcileVideos);
 
-// Delete a chat (cascades to its messages via the FK).
+// Delete a chat. The FK cascade removes its messages + media_files rows, but
+// won't run app code — so releasing local storage (decrementing the owner's
+// counter and unlinking the files from disk) is handled explicitly in
+// deleteChatAndReleaseMedia, which captures the local refs before the cascade.
 chatsRouter.delete('/:id', async (req, res) => {
   try {
-    const { rowCount } = await pool.query(
-      'DELETE FROM chats WHERE id = $1 AND user_id = $2',
-      [req.params.id, req.session.userId],
-    );
-    if (!rowCount) return res.status(404).json({ error: 'Chat not found' });
+    const { deleted } = await deleteChatAndReleaseMedia(req.session.userId, req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Chat not found' });
     res.json({ ok: true });
   } catch (err) {
     if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { useChats } from '../chat/ChatsContext.jsx';
+import { useStorage } from '../chat/StorageContext.jsx';
 import { streamMessage } from '../chat/stream.js';
 import ModelPicker from '../chat/ModelPicker.jsx';
 import VideoConfirm from '../chat/VideoConfirm.jsx';
@@ -64,6 +65,7 @@ export default function ChatPage() {
   const { chatId } = useParams();
   const navigate = useNavigate();
   const { chats, loading, updateChat, deleteChat, refresh, editingChatId, closeEditor } = useChats();
+  const { refresh: refreshStorage } = useStorage();
 
   const chat = chats.find((c) => c.id === chatId);
   const editing = chat && editingChatId === chat.id;
@@ -164,12 +166,14 @@ export default function ChatPage() {
           const upd = res.messages.find((r) => r.id === x.id);
           return upd ? { ...x, ...upd } : x;
         }));
+        // A completed job wrote its video to local storage — resync the counter.
+        refreshStorage();
       } catch { /* transient — try again next tick */ }
     };
     tick();
     const iv = setInterval(tick, 12000);
     return () => { alive = false; clearInterval(iv); };
-  }, [chatId, pendingVideoKey]);
+  }, [chatId, pendingVideoKey, refreshStorage]);
 
   // Keep the thread scrolled to the newest content.
   useEffect(() => {
@@ -206,6 +210,7 @@ export default function ChatPage() {
     if (!window.confirm('Delete this chat? This cannot be undone.')) return;
     try {
       await deleteChat(chat.id);
+      refreshStorage(); // deleting a chat frees any local media it held
       navigate('/');
     } catch (err) {
       setEditErr(err.message || 'Failed to delete');
@@ -303,6 +308,7 @@ export default function ChatPage() {
       setStreaming(false);
       setStreamingText('');
       refresh(); // re-sort the sidebar by recency
+      refreshStorage(); // an image attachment may have changed local usage
     }
   }
 
@@ -339,6 +345,7 @@ export default function ChatPage() {
     } finally {
       setGenerating(false);
       refresh();
+      refreshStorage(); // a generated image was written to local storage
     }
   }
 

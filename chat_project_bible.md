@@ -445,12 +445,12 @@ what's actually been spent, not prevention of overspend.
 
 ---
 
-## Implementation Notes & Deviations (as built through Step 6)
+## Implementation Notes & Deviations (as built through Step 7)
 
 This section records where the **built** app diverges from, clarifies, or adds
 to the original spec above. The spec captured intent during planning; these are
 the facts discovered during the build. When the two disagree, this section wins
-for anything through Step 6.
+for anything through Step 7.
 
 ### Model catalogues — separate endpoints per modality
 
@@ -540,3 +540,48 @@ accurate than the pure-estimate model the spec described.
 - Generated **video** output reuses the same local-storage mechanism as images;
   video mime types (mp4/webm/mov/mkv) are handled. `isSupportedImage()` stays
   image-only (uploads are image input only; video is output only).
+
+### Local storage accounting (Step 7)
+
+- **Counter maintenance is now symmetric.** `users.storage_used_bytes` is
+  decremented on removal, not just incremented on write. The only removal path is
+  **chat delete** (there are no per-message/per-media delete endpoints), handled
+  in `deleteChatAndReleaseMedia` (`server/src/storage/accounting.js`): inside one
+  transaction it captures the chat's local `file_ref`s + byte total **before** the
+  FK cascade wipes the `media_files` rows, deletes the chat, decrements the owner's
+  counter with a `GREATEST(0, …)` underflow guard, then unlinks the files from
+  disk **after commit** (a failed unlink must not undo a committed delete).
+  App-code, not a DB trigger, by choice.
+- **New endpoint `GET /api/storage`** → `{ usedBytes, capBytes, noticeBytes,
+  atNotice, atCap }`. Not in the original route plan. Reads the counter (no
+  per-request summing) and powers both the persistent notice and the settings
+  display.
+- **Persistent 3.5 GB notice.** The original transient SSE `storageNotice` flag
+  (emitted on the text path, never actually read by the client) is superseded by
+  a shell-level banner backed by `StorageContext` — fetched on load and on window
+  focus, refreshed after each generation/upload/delete. Amber at ≥3.5 GB, red
+  "full" at ≥5 GB. The SSE `storageUsed`/`storageNotice` fields are now vestigial.
+- **5 GB hard stop unchanged; the Generate button is *not* disabled at the cap.**
+  A click is refused **pre-flight** by the server (before any job or spend) with a
+  clear "at your 5 GB limit" message — matching the spec's "blocked write with a
+  clear message." Plain text (no attachment) is never blocked.
+- **Recompute tool: `server/scripts/recompute-storage.js`** (CLI, not an admin
+  route) — resets each user's counter to the true sum of their local
+  `media_files.size_bytes`. `--dry-run` reports drift, `--email` scopes to one
+  user, no args does all. Repairs the drift left by pre-Step-7 increment-only
+  builds. The counter is a self-healing cache; per-file `size_bytes` is truth.
+- **Orphaned disk files + sweep tool.** Orphans (files on disk with no
+  `media_files` row) can arise from a crash mid-write (bytes written, DB row never
+  committed) or a failed post-commit unlink — and pre-Step-7 deletes left some.
+  The normal delete path no longer creates them, and **`recompute-storage.js
+  --sweep-orphans`** cleans up any that occur: it removes local files under
+  `storageDir/<userId>/` that no local `media_files` row references **and** that
+  are older than 5 minutes (the age guard means an in-flight write whose row
+  hasn't committed is never swept out from under an active generation). Combine
+  with `--dry-run` to preview, `--email` to scope to one user. Orphans are
+  untracked, so the sweep never touches the counter. This is the on-disk sibling
+  of the Step 8 cloud "verify" reconciliation (`findOrphanFiles` /
+  `deleteOrphanFiles` in `server/src/storage/accounting.js`).
+- **No schema migration** was needed for Step 7 (pure app logic;
+  `media_files.unavailable_at` in the schema block is a Step 8 addition, not yet
+  migrated).

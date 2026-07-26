@@ -336,12 +336,26 @@ display** — and reconciles any counter drift the missing decrement caused.
 > When done, stop and tell me how to test threshold behavior without actually
 > generating 5 GB of real media. Wait for my confirmation before starting Step 8.
 
+**As built (deviations):** decrement + disk-unlink on delete is app-code in
+`deleteChatAndReleaseMedia` (captures local refs before the FK cascade, unlinks
+after commit); **chat delete is the only removal path** (no per-message/media
+delete endpoints). A new **`GET /api/storage`** endpoint backs a persistent
+shell banner (`StorageContext`, fetched on load + window focus), replacing the
+unused transient SSE flag. The Generate button isn't disabled at the cap — the
+click is refused pre-flight with a clear message. Recompute is a CLI
+(`scripts/recompute-storage.js`; `--dry-run`/`--email`/`--sweep-orphans`). **No
+schema migration.** `--sweep-orphans` removes untracked, >5-min-old files left on
+disk by a crash mid-write or pre-Step-7 deletes (the age guard spares in-flight
+writes); the normal delete path creates no new orphans. See the bible's
+"Implementation Notes & Deviations → Local storage accounting (Step 7)".
+
 **You test:**
 - [ ] Storage-used display in settings matches reality (sum of actual file sizes on disk for that user)
 - [ ] Artificially push a test account's counter near 3.5GB — confirm the notice appears, and still appears after a page reload (not just once, right after a write)
 - [ ] Push past 5GB — confirm new generations/uploads are blocked with a clear message, and existing chats/text still work normally
 - [ ] Delete some media **and** delete a whole chat that has media — confirm the counter decreases by the right amount, the files are gone from disk, and the block lifts appropriately
 - [ ] Run the reconcile/recompute against an account with a deliberately-skewed counter — confirm it resets to the true on-disk total
+- [ ] Run `--sweep-orphans --dry-run`, then `--sweep-orphans` — confirm it lists and removes untracked files left on disk while leaving tracked files intact
 
 **Do not proceed to Step 8 until all of the above are confirmed.**
 

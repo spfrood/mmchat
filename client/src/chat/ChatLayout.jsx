@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { ChatsProvider } from './ChatsContext.jsx';
+import { StorageProvider } from './StorageContext.jsx';
+import StorageNotice from './StorageNotice.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 import Sidebar from './Sidebar.jsx';
 
@@ -12,23 +14,26 @@ export default function ChatLayout() {
 
   return (
     <ChatsProvider>
-      <div className={`app-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
-        <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
-        <div className="main-col">
-          <header className="topbar">
-            <strong>mmchat</strong>
-            <div className="topbar-right">
-              <span className="muted small">
-                {user.email}{user.isAdmin ? ' · admin' : ''}
-              </span>
-              <button className="link-btn" onClick={logout}>Log out</button>
-            </div>
-          </header>
-          <main className="pane">
-            <Outlet />
-          </main>
+      <StorageProvider>
+        <div className={`app-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
+          <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
+          <div className="main-col">
+            <header className="topbar">
+              <strong>mmchat</strong>
+              <div className="topbar-right">
+                <span className="muted small">
+                  {user.email}{user.isAdmin ? ' · admin' : ''}
+                </span>
+                <button className="link-btn" onClick={logout}>Log out</button>
+              </div>
+            </header>
+            <StorageNotice />
+            <main className="pane">
+              <Outlet />
+            </main>
+          </div>
         </div>
-      </div>
+      </StorageProvider>
     </ChatsProvider>
   );
 }
