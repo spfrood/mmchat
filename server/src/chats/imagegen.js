@@ -116,14 +116,18 @@ export async function generateImage(req, res) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // clock_timestamp() (not the default now(), which is the shared transaction
+    // timestamp) so the user turn sorts strictly before its assistant reply even
+    // though both are inserted in one transaction.
     const um = await client.query(
-      `INSERT INTO messages (chat_id, role, content, content_type) VALUES ($1, 'user', $2, 'text') RETURNING id`,
+      `INSERT INTO messages (chat_id, role, content, content_type, created_at)
+       VALUES ($1, 'user', $2, 'text', clock_timestamp()) RETURNING id`,
       [chat.id, text],
     );
     userMsgId = um.rows[0].id;
     const am = await client.query(
-      `INSERT INTO messages (chat_id, role, content, content_type, metadata)
-       VALUES ($1, 'assistant', NULL, 'image', $2::jsonb) RETURNING id`,
+      `INSERT INTO messages (chat_id, role, content, content_type, metadata, created_at)
+       VALUES ($1, 'assistant', NULL, 'image', $2::jsonb, clock_timestamp()) RETURNING id`,
       [chat.id, JSON.stringify({ status: 'pending', model: chat.model_id, idempotencyKey: idempotencyKey || null })],
     );
     assistantId = am.rows[0].id;

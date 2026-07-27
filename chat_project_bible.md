@@ -657,3 +657,22 @@ accurate than the pure-estimate model the spec described.
   If a *different* account is connected, files it can't reach just flag
   unavailable on the next serve, so the re-link is safe either way. (Without
   this, disconnect→reconnect would orphan all prior cloud media permanently.)
+- **Chat delete leaves cloud files in Drive (deliberate — not a bug).** Deleting
+  a chat removes its DB rows (cascade) and unlinks its **local** files from disk +
+  decrements the counter (Step 7), but **does not delete cloud files** — they
+  persist in the user's `mmchat` Drive folder. Intentional: the folder doubles as
+  a **media library** that survives chat cleanup, so a user who never copied
+  media out of the cloud folder doesn't lose it when they tidy up old chats.
+  Cloud cleanup is the user's to do (in their own Drive). This local-deleted /
+  cloud-kept asymmetry is by design; account deletion (Step 11) likewise leaves
+  cloud files untouched.
+- **Media serve caching**: cloud 200s use a short `max-age=60, must-revalidate`
+  (files can vanish out-of-band, so don't pin them long); every error/410/404
+  response sets `Cache-Control: no-store` so a transient failure (e.g. a briefly
+  disconnected provider) can't be heuristically cached and keep showing the
+  placeholder after the file is reachable again. Local 200s stay long-immutable.
+- **Message ordering**: a generated turn inserts the user prompt + assistant
+  message in one transaction, so both would share `now()` (the transaction
+  timestamp) and sort ambiguously. Fixed by writing `created_at` with
+  `clock_timestamp()` (distinct per statement) and ordering
+  `created_at ASC, (role <> 'user') ASC` so the prompt always precedes its output.

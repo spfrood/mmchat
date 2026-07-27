@@ -143,14 +143,17 @@ export async function submitVideoJob(req, res) {
         category: 'pending',
       });
     }
+    // clock_timestamp() (not the shared transaction now()) so the user turn
+    // sorts strictly before its assistant reply within this one transaction.
     const um = await client.query(
-      `INSERT INTO messages (chat_id, role, content, content_type) VALUES ($1, 'user', $2, 'text') RETURNING id`,
+      `INSERT INTO messages (chat_id, role, content, content_type, created_at)
+       VALUES ($1, 'user', $2, 'text', clock_timestamp()) RETURNING id`,
       [chat.id, text],
     );
     userMsgId = um.rows[0].id;
     const am = await client.query(
-      `INSERT INTO messages (chat_id, role, content, content_type, metadata)
-       VALUES ($1, 'assistant', NULL, 'video', $2::jsonb) RETURNING id`,
+      `INSERT INTO messages (chat_id, role, content, content_type, metadata, created_at)
+       VALUES ($1, 'assistant', NULL, 'video', $2::jsonb, clock_timestamp()) RETURNING id`,
       [chat.id, JSON.stringify({
         status: 'pending', jobStatus: 'submitting', model: chat.model_id,
         idempotencyKey: idempotencyKey || null, jobId: null,

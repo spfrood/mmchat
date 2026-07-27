@@ -20,6 +20,15 @@ async function flagUnavailable(mediaId) {
     .catch(() => {});
 }
 
+// Never let the browser cache an error/unavailable response. 404/410 are
+// heuristically cacheable by default, which would pin a transient failure (e.g.
+// a file that was briefly unreachable while its provider was disconnected) and
+// keep showing the placeholder even after the file is reachable again.
+function noStore(res) {
+  res.setHeader('Cache-Control', 'no-store');
+  return res;
+}
+
 mediaRouter.get('/:id', async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -32,18 +41,18 @@ mediaRouter.get('/:id', async (req, res) => {
       [req.params.id, req.session.userId],
     );
     const media = rows[0];
-    if (!media) return res.status(404).json({ error: 'Not found' });
+    if (!media) return noStore(res).status(404).json({ error: 'Not found' });
 
     // Already known-gone (out-of-band delete): don't re-fetch.
     if (media.unavailable_at) {
-      return res.status(410).json({ error: 'This file is no longer available in your cloud storage.', category: 'unavailable' });
+      return noStore(res).status(410).json({ error: 'This file is no longer available in your cloud storage.', category: 'unavailable' });
     }
 
     if (media.storage_location === 'local') {
       res.setHeader('Content-Type', media.content_type || contentTypeFor(media.file_ref));
       res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
       return res.sendFile(resolveRef(media.file_ref), (err) => {
-        if (err && !res.headersSent) res.status(404).json({ error: 'Not found' });
+        if (err && !res.headersSent) noStore(res).status(404).json({ error: 'Not found' });
       });
     }
 
@@ -51,7 +60,7 @@ mediaRouter.get('/:id', async (req, res) => {
       // No account link (e.g. the provider was disconnected) → can't fetch it.
       const account = media.storage_account_id ? await getAccountById(media.storage_account_id) : null;
       if (!account) {
-        return res.status(410).json({ error: 'This file is stored in a cloud account that is no longer connected.', category: 'unavailable' });
+        return noStore(res).status(410).json({ error: 'This file is stored in a cloud account that is no longer connected.', category: 'unavailable' });
       }
       let dr;
       try {
@@ -59,17 +68,20 @@ mediaRouter.get('/:id', async (req, res) => {
         dr = await drive.downloadFile(token, media.file_ref);
       } catch (err) {
         console.error('[media] drive fetch failed:', err.message);
-        return res.status(502).json({ error: 'Could not reach your cloud storage.', category: 'model' });
+        return noStore(res).status(502).json({ error: 'Could not reach your cloud storage.', category: 'model' });
       }
       if (dr.status === 404) {
         await flagUnavailable(media.id); // deleted on the provider side
-        return res.status(410).json({ error: 'This file is no longer available in your cloud storage.', category: 'unavailable' });
+        return noStore(res).status(410).json({ error: 'This file is no longer available in your cloud storage.', category: 'unavailable' });
       }
       if (!dr.ok || !dr.body) {
-        return res.status(502).json({ error: 'Could not read the file from your cloud storage.', category: 'model' });
+        return noStore(res).status(502).json({ error: 'Could not read the file from your cloud storage.', category: 'model' });
       }
       res.setHeader('Content-Type', media.content_type || dr.headers.get('content-type') || 'application/octet-stream');
-      res.setHeader('Cache-Control', 'private, max-age=3600');
+      // Short cache + revalidate: cloud files can be deleted out-of-band, so we
+      // don't want the browser pinning a copy for long (it would keep showing a
+      // file the user deleted in Drive until the cache expired).
+      res.setHeader('Cache-Control', 'private, max-age=60, must-revalidate');
       // Stream the provider response body straight through.
       const reader = dr.body.getReader();
       try {
@@ -80,16 +92,16 @@ mediaRouter.get('/:id', async (req, res) => {
         }
         return res.end();
       } catch (err) {
-        if (!res.headersSent) res.status(502).json({ error: 'Cloud download interrupted.' });
+        if (!res.headersSent) noStore(res).status(502).json({ error: 'Cloud download interrupted.' });
         else res.end();
       }
       return;
     }
 
-    return res.status(404).json({ error: 'Not found' });
+    return noStore(res).status(404).json({ error: 'Not found' });
   } catch (err) {
-    if (err.code === '22P02') return res.status(404).json({ error: 'Not found' });
+    if (err.code === '22P02') return noStore(res).status(404).json({ error: 'Not found' });
     console.error('[media] serve failed:', err.message);
-    if (!res.headersSent) res.status(500).json({ error: 'Failed to load media' });
+    if (!res.headersSent) noStore(res).status(500).json({ error: 'Failed to load media' });
   }
 });

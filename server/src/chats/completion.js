@@ -59,7 +59,8 @@ export async function listMessages(req, res) {
     const { rows } = await pool.query(
       `SELECT id, role, content, content_type, cost_usd, created_at,
               metadata ->> 'status' AS status
-         FROM messages WHERE chat_id = $1 ORDER BY created_at ASC`,
+         FROM messages WHERE chat_id = $1
+        ORDER BY created_at ASC, (role <> 'user') ASC`,
       [chat.id],
     );
     const ids = rows.map((m) => m.id);
