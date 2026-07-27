@@ -96,6 +96,7 @@ mmchat/
   ├── AGENTS.md
   ├── build_guide.md
   ├── chat_project_bible.md
+  ├── LICENSE
   ├── package.json
   └── README.md
 ```
@@ -205,7 +206,7 @@ second model). Invite-only, multi-user, not publicized.
 
 ## 3. Inline File Bundle
 
-Complete source for all 69 essential files, each labeled with its repo-relative path. Code fences are auto-sized so files containing their own ```` ``` ```` blocks (the markdown docs) render intact.
+Complete source for all 70 essential files, each labeled with its repo-relative path. Code fences are auto-sized so files containing their own ```` ``` ```` blocks (the markdown docs) render intact.
 
 ### File: `.githooks/pre-commit`
 
@@ -413,6 +414,32 @@ ad-hoc checks used a throwaway Dockerized Postgres 16 + a mock OpenRouter.
 | `client/src/api.js` | `fetch` wrapper for same-origin `/api` (cookies included) |
 ````
 
+### File: `LICENSE`
+
+```text
+MIT License
+
+Copyright (c) 2026 spfrood
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ### File: `README.md`
 
 ```markdown
@@ -449,7 +476,7 @@ Actively being built, following the staged plan in build_guide.md. Not yet featu
 
 License
 
-TBD
+MIT — see [LICENSE](LICENSE). All dependencies are permissive-licensed (MIT/ISC/BSD/Apache-2.0/0BSD); none are copyleft.
 ```
 
 ### File: `build_guide.md`
@@ -5022,6 +5049,7 @@ export default defineConfig({
   "version": "0.0.0",
   "private": true,
   "description": "Multi-Model AI Chat Client — monorepo root",
+  "license": "MIT",
   "workspaces": [
     "client",
     "server"

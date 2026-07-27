@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Multi-Model AI Chat Client — monorepo root",
+  "license": "MIT",
   "workspaces": [
     "client",
     "server"

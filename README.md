@@ -31,4 +31,4 @@ Actively being built, following the staged plan in build_guide.md. Not yet featu
 
 License
 
-TBD
+MIT — see [LICENSE](LICENSE). All dependencies are permissive-licensed (MIT/ISC/BSD/Apache-2.0/0BSD); none are copyleft.
