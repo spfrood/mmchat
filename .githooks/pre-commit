@@ -1,0 +1,15 @@
+#!/bin/sh
+# Keep mmchat-bundle.md in sync with every commit.
+#
+# gen-bundle.mjs regenerates the whole-repo bundle from `git ls-files` and, before
+# writing, scans tracked files for credentials — if it finds one it exits non-zero,
+# which aborts this commit (so a secret can never be baked into the shared bundle).
+# On success we stage the refreshed bundle so it rides along in this commit.
+#
+# Enable once per clone:  npm run setup:hooks   (sets core.hooksPath=.githooks)
+
+node scripts/gen-bundle.mjs || {
+  echo "pre-commit: bundle generation failed (see above) — commit aborted." >&2
+  exit 1
+}
+git add mmchat-bundle.md

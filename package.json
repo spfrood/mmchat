@@ -16,7 +16,9 @@
     "start:server": "npm --workspace server run start",
     "build:client": "npm --workspace client run build",
     "migrate": "npm --workspace server run migrate",
-    "migrate:status": "npm --workspace server run migrate:status"
+    "migrate:status": "npm --workspace server run migrate:status",
+    "bundle": "node scripts/gen-bundle.mjs",
+    "setup:hooks": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
