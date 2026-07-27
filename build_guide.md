@@ -361,17 +361,15 @@ writes); the normal delete path creates no new orphans. See the bible's
 
 ---
 
-## Step 8 — Cloud Storage: Google Drive → Dropbox → OneDrive
+## Step 8 — Cloud Storage: Google Drive
 
-**Goal**: OAuth linking and folder assignment for each Tier 1 provider, one
-at a time. Test each provider fully before starting the next — don't build
-all three and then test.
+**Goal**: OAuth linking and folder assignment for Google Drive — the one
+supported cloud provider. (Dropbox, OneDrive, and the WebDAV fallback are
+**deferred to "Future updates"** in the bible — Google Drive is enough for now.)
 
-**Prompt (repeat once per provider — Drive first, then Dropbox, then OneDrive):**
+**Prompt:**
 > Read `chat_project_bible.md` — the "Cloud storage linking" section and the
-> `storage_accounts` table. Build the [Google Drive / Dropbox / OneDrive]
-> integration only (not the other two, even if you're doing this prompt a
-> second or third time — one provider per pass):
+> `storage_accounts` table. Build the Google Drive integration:
 > - OAuth2 connect/disconnect flow from the settings page.
 > - Encrypted refresh token storage (same AES-256-GCM pattern as the
 >   OpenRouter key).
@@ -388,28 +386,50 @@ all three and then test.
 >   cloud files" button in settings that walks this provider's `media_files`
 >   rows, checks each is still reachable, and flags the vanished ones. Keep the
 >   rows (history + `cost_usd` must survive) — soft-flag, never hard-delete.
->   (Recomputing a per-account byte counter comes in Step 9 — there's no
->   `bytes_used` yet at this step.)
+>   (Recomputing a per-account byte counter is deferred with the rest of the
+>   multi-provider quota work — there's no `bytes_used` yet at this step.)
 >
 > When done, stop and tell me how to test the full connect → generate →
-> verify-in-cloud-folder → disconnect flow for this provider specifically.
-> Wait for my confirmation before moving to the next provider.
+> verify-in-Drive → disconnect flow. Wait for my confirmation before starting
+> the next step.
 
-**You test, per provider:**
-- [ ] Connect flow completes, folder can be selected/assigned
-- [ ] Generate an image or video with this provider connected — confirm the file actually lands in the correct cloud folder
+**As built — Google Drive (deviations):** raw Drive REST over `fetch` (no SDK);
+scope **`drive.file`** with an **app-created `mmchat` folder** instead of the
+Google Picker (least privilege; the user can't target an arbitrary pre-existing
+folder). Requires a Google Cloud OAuth client — env `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET`, `PUBLIC_BASE_URL` (redirect URI
+`…/api/storage/google/callback`); if unset, Drive isn't offered. **Migration
+004** adds `media_files.unavailable_at` + `content_type` and a
+`storage_accounts (user_id, provider)` unique. **Only generation output** routes
+to cloud; uploaded vision **input stays local** this pass. Cloud writes skip the
+5 GB counter/cap. Disconnected-account cloud rows degrade to the same
+"unavailable" placeholder as out-of-band-deleted ones. `bytes_used` recompute is
+deferred with the multi-provider quota work. On reconnect the app reuses its
+existing `mmchat` folder rather than creating duplicates. See the bible's
+"Implementation Notes & Deviations → Cloud storage — Google Drive (Step 8)".
+
+**You test:**
+- [ ] Connect flow completes (Settings → Cloud storage → Connect Google Drive → consent → connected)
+- [ ] Generate an image or video with Drive connected — confirm the file actually lands in the `mmchat` folder in your Drive
 - [ ] Confirm this generation does NOT count against the local 5GB cap
-- [ ] Delete a file directly in the cloud provider (out-of-band), then reload the chat — confirm it renders "no longer in your cloud storage", not a broken image or a crash
+- [ ] Delete a file directly in Google Drive (out-of-band), then reload the chat — confirm it renders "no longer in your cloud storage", not a broken image or a crash
 - [ ] Run "Verify cloud files" — confirm the out-of-band-deleted file gets flagged and stops showing as present, while its message + cost record remain
-- [ ] Disconnect the provider — confirm past references still show correctly (or degrade gracefully) and new generations fall back to local disk
-- [ ] Reconnect — confirm it doesn't break anything or duplicate stored accounts
+- [ ] Disconnect — confirm past references degrade gracefully (show the "unavailable" placeholder) and new generations fall back to local disk
+- [ ] Reconnect the same Google account — confirm previously-generated media displays again (re-adopted), no duplicate stored accounts, and the existing `mmchat` folder is reused
 
-**Do not proceed to the next provider (or to Step 9) until the current one is
-fully confirmed.**
+**Do not proceed to the next step until all of the above are confirmed.**
 
 ---
 
-## Step 9 — Cloud Storage Priority & Quotas
+## Step 9 — Cloud Storage Priority & Quotas — DEFERRED (Future updates)
+
+**Deferred** — only relevant with more than one cloud provider linked, and
+Google Drive is the sole provider for now. The full design (priority ordering,
+per-provider quotas, per-account `bytes_used`, fallthrough, quota notice banner)
+lives in the bible's "## Future updates". The original step prompt is retained
+below for whenever multi-provider support is picked up.
+
+### (deferred) Original prompt — Cloud Storage Priority & Quotas
 
 **Goal**: once more than one provider is connected, let the user control which
 one is used first and cap how much of each is consumed.
@@ -451,8 +471,12 @@ one is used first and cap how much of each is consumed.
 
 ---
 
-## Step 10 — WebDAV Fallback (optional — build only if you decide you need it)
+## Step 10 — WebDAV Fallback — DEFERRED (Future updates)
 
+**Deferred** with the rest of the multi-provider work (see the bible's
+"## Future updates"). Retained below for whenever it's picked up.
+
+### (deferred) Original prompt — WebDAV Fallback
 **Prompt:**
 > Read `chat_project_bible.md` — the "Tier 2 — generic WebDAV fallback"
 > section. Build a generic WebDAV adapter (endpoint URL + username/password
@@ -475,6 +499,8 @@ you've decided you don't need it yet).**
 ---
 
 ## Step 11 — Settings / Account Menu Completion
+
+*(With Steps 9–10 deferred, this is the **next active step after Step 8**.)*
 
 **Goal**: everything in the settings menu that isn't already built —
 profile editing, credits display, account deletion.

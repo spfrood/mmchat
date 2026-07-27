@@ -129,6 +129,10 @@ export default function SettingsPage() {
         <StorageUsage />
       </Section>
 
+      <Section title="Cloud storage">
+        <CloudStorage />
+      </Section>
+
       {user.isAdmin && (
         <Section title="Admin — generate an invite">
           <AdminInvites />
@@ -177,6 +181,90 @@ function StorageUsage() {
           Deleting a chat frees the media it held.
         </p>
       )}
+    </>
+  );
+}
+
+// Cloud storage linking (Step 8: Google Drive). When connected, generated media
+// uploads to the user's own Drive folder instead of local disk and doesn't count
+// against the 5 GB cap. "Verify cloud files" reconciles our references against
+// Drive after the user deletes files there directly.
+function CloudStorage() {
+  const [status, setStatus] = useState(null); // { google_drive: {...} }
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+
+  async function load() {
+    try { setStatus(await api('/storage/providers')); }
+    catch { setStatus({ google_drive: { configured: false, connected: false } }); }
+  }
+
+  useEffect(() => {
+    load();
+    // Surface the outcome of the OAuth round-trip (?cloud=…&connected / &error).
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('cloud') === 'google_drive') {
+      if (q.get('connected')) setNote('Google Drive connected. New media will upload there.');
+      else if (q.get('error')) setError(`Couldn't connect Google Drive (${q.get('error')}).`);
+      window.history.replaceState({}, '', '/settings');
+    }
+  }, []);
+
+  const gd = status?.google_drive;
+
+  async function disconnect() {
+    if (!window.confirm('Disconnect Google Drive? Files already in your Drive stay there, but they’ll no longer display in the app, and new media will save locally.')) return;
+    setBusy(true); setError(''); setNote('');
+    try { await api('/storage/google', { method: 'DELETE' }); setNote('Google Drive disconnected.'); await load(); }
+    catch (err) { setError(err.message || 'Failed to disconnect'); }
+    finally { setBusy(false); }
+  }
+
+  async function verify() {
+    setBusy(true); setError(''); setNote('');
+    try {
+      const r = await api('/storage/verify', { method: 'POST', body: {} });
+      setNote(`Checked ${r.checked} file(s); flagged ${r.flagged} no longer in your Drive.`);
+    } catch (err) { setError(err.message || 'Verify failed'); }
+    finally { setBusy(false); }
+  }
+
+  if (!status) return <p className="muted small">Loading…</p>;
+
+  return (
+    <>
+      <p className="key-status">
+        <strong>Google Drive</strong>
+        {gd?.connected ? <span className="muted small"> · connected</span> : null}
+      </p>
+
+      {!gd?.configured ? (
+        <p className="muted small">Google Drive isn’t configured on this server.</p>
+      ) : gd.connected ? (
+        <>
+          <p className="muted small">
+            New generated media uploads to your <code>{gd.folderName}</code> folder in Google Drive
+            and doesn’t count against your 5 GB local cap.
+          </p>
+          <div className="row-btns">
+            <button onClick={verify} disabled={busy}>{busy ? 'Working…' : 'Verify cloud files'}</button>
+            <button className="danger" onClick={disconnect} disabled={busy}>Disconnect</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="muted small">
+            Connect Google Drive to store generated images and videos in your own Drive
+            instead of local disk.
+          </p>
+          <button onClick={() => { window.location.href = '/api/storage/google/connect'; }}>
+            Connect Google Drive
+          </button>
+        </>
+      )}
+      {error && <p className="error">{error}</p>}
+      {note && <p className="muted small">{note}</p>}
     </>
   );
 }

@@ -197,70 +197,36 @@ user closed the tab or the completion event was missed.
 
 ### Cloud storage linking (offloads from the 5GB cap)
 
-**Tier 1 — native OAuth integration, build first:**
-- Google Drive (Drive API)
-- Dropbox (DBX Platform)
-- Microsoft OneDrive (Microsoft Graph API)
+**Google Drive is the one supported cloud provider (v1).** OAuth2 flow, encrypted
+refresh token stored server-side (same encryption pattern as the OpenRouter key),
+uploads into an app-owned `mmchat` folder in the user's Drive.
 
-Each: OAuth2 flow, encrypted refresh token stored server-side (same encryption
-pattern as the OpenRouter key), user selects/assigns one target folder per
-connected provider.
+Behavior: if a user has Google Drive connected, new generated media uploads there
+instead of local disk, and only a reference (external file id + provider) is
+stored in the DB — doesn't count against the 5GB cap. Not connected → media saves
+to local disk and counts against the cap.
 
-**Tier 2 — generic WebDAV fallback:**
-- One generic WebDAV adapter (endpoint URL + username/password or app token,
-  entered manually — no native folder picker, weaker UX than Tier 1)
-- Covers Icedrive, Internxt, self-hosted Nextcloud, and similar providers that
-  lack a proper third-party write API
-- Build only if Tier 1 proves insufficient
-
-**Explicitly excluded:**
-- iCloud — no public API for third-party write access to a user's iCloud Drive
-- Mega, NordLocker, Internxt (as a *native* integration) — zero-knowledge/client-
-  side encryption architecture is incompatible with simple server-side writes;
-  Internxt is only in scope via the generic WebDAV fallback, not a native adapter
-- IDrive — public docs point to IDrive e2 (S3-compatible object storage), a
-  different product from IDrive's consumer backup app; no confirmed general-
-  purpose write API found. Do not build against it without confirming current
-  docs directly.
-
-Behavior: if a user has a cloud folder configured, new media uploads there
-instead of local disk, and only a reference (external file ID/path + provider) is
-stored in the DB — doesn't count against the 5GB cap. No folder configured →
-falls back to local disk, counts against the cap.
-
-**Priority and per-provider quotas**, if more than one provider is linked:
-- User sets an explicit priority order among their linked providers (e.g. Drive
-  first, Dropbox second). New media uploads to the highest-priority provider
-  with room available.
-- Each linked provider can optionally have a user-set quota (in GB), capping
-  how much of *that* provider's storage this app is allowed to consume —
-  independent of the provider's own account capacity. Left blank = no
-  app-imposed cap for that provider.
-- If the top-priority provider is at its quota (or an upload fails for a
-  provider-side reason), the app falls through to the next provider in
-  priority order, and finally to local disk (still subject to the 5GB cap) if
-  every linked provider is full or none are configured.
-- **Notice banner**: an in-app notification appears when any linked provider
-  hits its quota (same notice pattern as the local 3.5GB warning), so the user
-  knows uploads have started falling through to a lower-priority provider (or
-  to local disk) rather than silently discovering it later.
-- Requires tracking bytes used per linked storage account (not just per
-  provider type), same denormalized-counter pattern as `users.storage_used_bytes`
-  but scoped to the individual `storage_accounts` row — see schema update below.
+> Additional providers (Dropbox, OneDrive, a generic WebDAV fallback) and
+> multi-provider **priority ordering + per-provider quotas** (with per-account
+> `bytes_used` tracking) are **deferred** — Google Drive is enough for now. See
+> the "## Future updates" section for the full deferred design and the
+> provider-exclusion notes.
 
 ### Out-of-band deletion & manual verification
 
-Cloud files live in the user's own provider account, so the user can delete them
-directly (in Drive/Dropbox/etc.) without going through this app — a door that
-doesn't exist for local disk, where a file can only be removed through the app.
-When that happens, our `media_files` row and the provider's `bytes_used` counter
-still reference a file that's gone. Two things must degrade gracefully:
+Cloud files live in the user's own Google Drive, so the user can delete them
+directly (in Drive) without going through this app — a door that doesn't exist
+for local disk, where a file can only be removed through the app. When that
+happens, our `media_files` row still references a file that's gone. What must
+degrade gracefully:
 
 - **Serving**: fetching a since-deleted cloud file returns 404/410 from the
   provider. Render it as "no longer available in your cloud storage" rather than
   a broken thumbnail — and flag the row so we don't keep re-fetching it.
-- **Accounting**: the vanished file's bytes must stop counting toward that
-  provider's `bytes_used` (and therefore its quota / fallthrough routing).
+- **Accounting** (future): once per-account `bytes_used` tracking exists (deferred
+  — see "## Future updates"), the vanished file's bytes must also stop counting
+  toward that account's quota / fallthrough routing. Cloud media isn't byte-
+  counted today, so this is currently a no-op.
 
 `media_files` is our local manifest of what should exist where (provider +
 external `file_ref` per row), so reconciliation is a walk over that manifest:
@@ -271,8 +237,9 @@ external `file_ref` per row), so reconciliation is a walk over that manifest:
   next accessed.
 - **Manual "Verify cloud files" button (settings), not an automatic sweep:**
   walks the connected provider's `media_files` rows, checks each is still
-  reachable, flags the vanished ones, and recomputes the provider's `bytes_used`
-  from the survivors. Chosen over a background auto-scan deliberately — each
+  reachable, and flags the vanished ones (recomputing per-account `bytes_used`
+  from the survivors is a future add-on, once byte-counting exists). Chosen over
+  a background auto-scan deliberately — each
   check is a per-file network round-trip under the provider's rate limits, so a
   user with a large library would make an auto-sweep slow and quota-hungry. The
   user triggers it (with progress feedback) when a number looks wrong.
@@ -294,10 +261,9 @@ is ground truth; the counter is a self-healing cache over it.
 - OpenRouter API key (update key, view last-4, view credits)
 - Spend dashboard (total spend all-time/this month, breakdown by model and by
   chat, computed from `messages.cost_usd`)
-- Cloud storage (connect/disconnect Drive, Dropbox, OneDrive, or configure WebDAV;
-  set target folder, priority order, and optional quota per provider;
-  view local storage used vs 5GB cap; "verify cloud files" to reconcile stored
-  references against the provider after out-of-band deletions)
+- Cloud storage (connect/disconnect Google Drive; view local storage used vs 5GB
+  cap; "verify cloud files" to reconcile stored references against Drive after
+  out-of-band deletions)
 - Delete account
 
 ## Database Schema
@@ -426,9 +392,8 @@ what's actually been spent, not prevention of overspend.
   "Implementation Notes & Deviations → Video generation" below.
 - ✅ **RESOLVED (Steps 5–6).** Output URL expiry: build proceeds on the safe
   "fetch immediately" assumption for both image and video output (implemented).
-- IDrive: confirm whether any current API supports third-party write access to
-  the consumer product, if you want to revisit adding it later (still open —
-  future cloud-storage work).
+- Additional cloud providers (Dropbox / OneDrive / WebDAV / IDrive) are deferred
+  — see "## Future updates" for the design and the provider-exclusion notes.
 
 ## Suggested Build Order
 
@@ -438,19 +403,63 @@ what's actually been spent, not prevention of overspend.
 4. Image modality (Unified Image API)
 5. Video modality (async handling — highest complexity, do last among modalities)
 6. Local storage accounting + 3.5GB/5GB thresholds
-7. Cloud storage: Drive → Dropbox → OneDrive (OAuth flows, folder assignment,
-   upload-on-generate)
-8. WebDAV fallback (optional, defer until needed)
-9. Settings/account menu, credits display, account deletion
+7. Cloud storage: Google Drive (OAuth flow, app folder, upload-on-generate,
+   out-of-band verify)
+8. Settings/account menu, credits display, account deletion
+
+(Additional cloud providers + multi-provider priority/quotas + WebDAV are
+deferred — see "## Future updates".)
 
 ---
 
-## Implementation Notes & Deviations (as built through Step 7)
+## Future updates
+
+Deferred beyond v1 — Google Drive is enough for now. Captured here so the intent
+isn't lost; none of this is built.
+
+### Additional cloud storage providers
+- **Dropbox** (DBX Platform) and **Microsoft OneDrive** (Microsoft Graph API) as
+  native OAuth integrations, same pattern as Google Drive (OAuth2, encrypted
+  refresh token, app folder, upload-on-generate, out-of-band verify).
+- **Generic WebDAV fallback** — one adapter (endpoint URL + username/password or
+  app token, entered manually; no native folder picker). Covers Icedrive,
+  Internxt, self-hosted Nextcloud, and similar providers lacking a proper
+  third-party write API.
+- The `storage_accounts.provider` enum + `media_files.storage_location` enum
+  already allow `dropbox|onedrive|webdav`, so adding a provider is a new provider
+  module + routes, not a migration.
+
+**Explicitly excluded** (don't build without re-confirming current docs):
+- iCloud — no public API for third-party write access to a user's iCloud Drive.
+- Mega, NordLocker, Internxt (as a *native* integration) — zero-knowledge/client-
+  side encryption is incompatible with simple server-side writes; Internxt only
+  in scope via the generic WebDAV fallback.
+- IDrive — public docs point to IDrive e2 (S3-compatible), a different product
+  from the consumer backup app; no confirmed general-purpose write API found.
+
+### Multi-provider priority + per-provider quotas
+Only relevant once more than one provider can be linked:
+- User sets an explicit **priority order** among linked providers; new media
+  uploads to the highest-priority one with room.
+- Each provider can have a user-set **quota (GB)** capping how much of *that*
+  account this app may consume. At quota (or on a provider-side failure), uploads
+  **fall through** to the next provider, and finally to local disk (still under
+  the 5GB cap).
+- **Notice banner** when a provider hits its quota (same pattern as the local
+  3.5GB notice), so fallthrough isn't silent.
+- Requires **per-account `bytes_used`** tracking (denormalized counter scoped to
+  each `storage_accounts` row — columns already exist), maintained on
+  upload/delete and re-synced by the "verify cloud files" sweep. This is what the
+  out-of-band verify's `bytes_used` recompute (above) plugs into.
+
+---
+
+## Implementation Notes & Deviations (as built through Step 8)
 
 This section records where the **built** app diverges from, clarifies, or adds
 to the original spec above. The spec captured intent during planning; these are
 the facts discovered during the build. When the two disagree, this section wins
-for anything through Step 7.
+for anything through Step 8.
 
 ### Model catalogues — separate endpoints per modality
 
@@ -585,3 +594,66 @@ accurate than the pure-estimate model the spec described.
 - **No schema migration** was needed for Step 7 (pure app logic;
   `media_files.unavailable_at` in the schema block is a Step 8 addition, not yet
   migrated).
+
+### Cloud storage — Google Drive (Step 8)
+
+- **Raw REST over `fetch`, no `googleapis` SDK** — matches the OpenRouter client
+  style, keeps deps light, and lets the Google base URLs be pointed at a mock in
+  tests (`GOOGLE_AUTH_BASE` / `GOOGLE_OAUTH_BASE` / `GOOGLE_API_BASE`).
+  `server/src/storage/providers/googleDrive.js`.
+- **Scope `drive.file` + app-created folder, not the Google Picker.** Least
+  privilege (the app only ever sees files it creates, so no Google security
+  review is triggered). On connect the app reuses (or creates) its own `mmchat`
+  folder at the Drive root and uploads into it — reconnect finds the existing
+  folder by name via `files.list` (which under `drive.file` only returns files
+  this app created, so it can't match an unrelated user folder) rather than
+  spawning duplicates. This is the "reasonable folder assignment" the spec allows
+  in place of a native picker. The user can't currently target an arbitrary
+  pre-existing folder (a `drive.file` limitation); revisit with the Picker if
+  needed.
+- **OAuth is server-side authorization-code with `access_type=offline` +
+  `prompt=consent`** (forces a refresh_token every time). Refresh token stored
+  **encrypted** (same AES-256-GCM helper as the OpenRouter key); short-lived
+  access tokens are derived on demand and cached in-process
+  (`storage/accounts.js`). Endpoints: `GET /api/storage/google/connect` (302 →
+  Google, CSRF `state` in session), `GET /api/storage/google/callback`,
+  `DELETE /api/storage/google`, `GET /api/storage/providers`,
+  `POST /api/storage/verify`.
+- **Config / env (all optional):** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+  `PUBLIC_BASE_URL` (builds the redirect URI `…/api/storage/google/callback`). If
+  unset, Drive simply isn't offered and everything stays local.
+- **Migration 004** adds `media_files.unavailable_at` (out-of-band flag) **and**
+  `media_files.content_type` (a cloud `file_ref` is an opaque Drive id with no
+  extension to infer MIME from — local rows still fall back to extension), plus a
+  `storage_accounts (user_id, provider)` UNIQUE so reconnect is an idempotent
+  upsert.
+- **Only generation output routes to cloud this pass; uploaded vision *input*
+  stays local.** The Step 8 prompt scoped cloud offload to generated media; a
+  shared `storage/output.js` (`resolveOutputTarget` / `persistGeneratedOutput`)
+  now backs both image + video generation and decides cloud-vs-local in one
+  place. Cloud writes record only the external reference and **do not** touch
+  `users.storage_used_bytes`; the 5 GB pre-flight cap is skipped when the target
+  is cloud. Input attachments could be folded in later.
+- **Serving cloud media** (`/api/media/:id`) streams the file down from Drive
+  with a fresh access token. Out-of-band handling: a Drive **404 → set
+  `unavailable_at` → 410**; an already-flagged row 410s without re-fetching
+  (lazy detection). A cloud row whose account was **disconnected** (FK set the
+  `storage_account_id` NULL) also 410s ("no longer connected"). The client
+  renders a **placeholder** for `unavailable` attachments and has an `onError`
+  fallback that swaps a broken img/video for the same placeholder.
+- **"Verify cloud files"** (`POST /api/storage/verify`, button in Settings) walks
+  the user's still-available Drive media and flags any the provider reports gone
+  (404 or trashed). **Soft-flag only** — rows are kept so history + `cost_usd`
+  survive. Per-account `bytes_used` recompute is **deferred** (Future updates) —
+  no cloud byte counter exists yet.
+- **Disconnect** revokes at Google (best-effort) and drops the `storage_accounts`
+  row. The FK (`ON DELETE SET NULL`) nulls `storage_account_id` on the user's
+  existing cloud media, which then serve as the "unavailable" placeholder while
+  disconnected. Files in the user's Drive are never deleted.
+- **Reconnect re-adopts orphaned media.** `saveAccount` re-links the user's
+  same-provider, NULL-account, not-yet-flagged `media_files` rows to the new
+  account — so reconnecting (the same Google account) restores access to
+  previously-generated files instead of leaving them stuck on the placeholder.
+  If a *different* account is connected, files it can't reach just flag
+  unavailable on the next serve, so the re-link is safe either way. (Without
+  this, disconnect→reconnect would orphan all prior cloud media permanently.)

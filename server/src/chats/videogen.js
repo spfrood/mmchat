@@ -11,7 +11,7 @@ import {
   classifyError,
   errorMessage,
 } from '../openrouter/client.js';
-import { writeUserFile, deleteRef } from '../storage/local.js';
+import { resolveOutputTarget, persistGeneratedOutput } from '../storage/output.js';
 import { loadOwnedChat, mediaView } from './completion.js';
 
 // Video generation is ASYNCHRONOUS (bible: OpenRouter's /videos endpoint submits
@@ -36,7 +36,8 @@ async function loadMessageView(messageId) {
   );
   if (!rows.length) return null;
   const media = await pool.query(
-    `SELECT id, direction, size_bytes, file_ref FROM media_files WHERE message_id = $1 ORDER BY created_at ASC`,
+    `SELECT id, direction, size_bytes, file_ref, content_type, storage_location, unavailable_at
+       FROM media_files WHERE message_id = $1 ORDER BY created_at ASC`,
     [messageId],
   );
   const r = rows[0];
@@ -107,9 +108,14 @@ export async function submitVideoJob(req, res) {
   }
 
   // Pre-flight storage check: don't spend if there's no room to keep the result.
-  const { rows: u0 } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
-  if (Number(u0[0].storage_used_bytes) >= config.maxLocalBytes) {
-    return res.status(400).json({ error: 'You are at your 5 GB local storage limit. Delete some media first.', category: 'storage' });
+  // Only applies when output lands locally — a linked cloud folder doesn't count
+  // against the 5 GB cap.
+  const target = await resolveOutputTarget(userId);
+  if (target.kind === 'local') {
+    const { rows: u0 } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
+    if (Number(u0[0].storage_used_bytes) >= config.maxLocalBytes) {
+      return res.status(400).json({ error: 'You are at your 5 GB local storage limit. Delete some media first.', category: 'storage' });
+    }
   }
 
   // Create the user prompt + a pending assistant row atomically. A per-user
@@ -288,19 +294,20 @@ async function reconcileOne(userId, chat, row, key) {
     return loadMessageView(row.id);
   }
 
-  const written = [];
+  // Download every returned video (URLs aren't durable; the download needs the
+  // bearer key). A transient failure here leaves the message pending so a later
+  // reconcile can retry.
+  let buffers;
   try {
+    buffers = [];
     for (const url of urls) {
       const r = await fetchVideoContent({ key, url });
       if (!r.ok) throw new Error(`content HTTP ${r.status}`);
       const buffer = Buffer.from(await r.arrayBuffer());
       const mimetype = (r.headers.get('content-type') || 'video/mp4').split(';')[0];
-      const { fileRef, sizeBytes } = await writeUserFile(userId, { buffer, mimetype, originalname: 'generated' });
-      written.push({ fileRef, sizeBytes });
+      buffers.push({ buffer, mimetype });
     }
   } catch (err) {
-    await Promise.all(written.map((w) => deleteRef(w.fileRef)));
-    // Leave pending so a later reconcile can retry the download.
     console.error('[videogen] download failed:', err.message);
     return loadMessageView(row.id);
   }
@@ -312,30 +319,14 @@ async function reconcileOne(userId, chat, row, key) {
     if (per != null) cost = per;
   }
 
-  const c2 = await pool.connect();
+  // Persist to the resolved target (cloud folder or local disk). A failure here
+  // (e.g. a cloud upload error) is treated as transient: leave the message
+  // pending and let the next reconcile retry, rather than marking it failed.
   try {
-    await c2.query('BEGIN');
-    for (const w of written) {
-      await c2.query(
-        `INSERT INTO media_files (message_id, direction, storage_location, file_ref, size_bytes)
-         VALUES ($1, 'output', 'local', $2, $3)`,
-        [row.id, w.fileRef, w.sizeBytes],
-      );
-    }
-    await c2.query(
-      `UPDATE messages SET metadata = jsonb_set(metadata, '{status}', '"complete"'), cost_usd = $2 WHERE id = $1`,
-      [row.id, cost],
-    );
-    const total = written.reduce((n, w) => n + w.sizeBytes, 0);
-    await c2.query('UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2', [total, userId]);
-    await c2.query('UPDATE chats SET updated_at = now() WHERE id = $1', [chat.id]);
-    await c2.query('COMMIT');
+    await persistGeneratedOutput({ userId, messageId: row.id, chatId: chat.id, buffers, cost });
   } catch (err) {
-    await c2.query('ROLLBACK').catch(() => {});
-    await Promise.all(written.map((w) => deleteRef(w.fileRef)));
-    c2.release();
-    throw err;
+    console.error('[videogen] persist failed:', err.message);
+    return loadMessageView(row.id);
   }
-  c2.release();
   return loadMessageView(row.id);
 }

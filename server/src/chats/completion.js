@@ -43,6 +43,10 @@ export function mediaView(m) {
     direction: m.direction,
     sizeBytes: Number(m.size_bytes),
     contentType: m.content_type || (m.file_ref ? contentTypeFor(m.file_ref) : undefined),
+    storageLocation: m.storage_location,
+    // Cloud file the user deleted on the provider side (out-of-band). The client
+    // renders a "no longer in your cloud storage" placeholder instead of fetching.
+    unavailable: Boolean(m.unavailable_at),
     url: `/api/media/${m.id}`,
   };
 }
@@ -62,7 +66,8 @@ export async function listMessages(req, res) {
     const byMsg = new Map();
     if (ids.length) {
       const media = await pool.query(
-        `SELECT id, message_id, direction, size_bytes, file_ref
+        `SELECT id, message_id, direction, size_bytes, file_ref,
+                content_type, storage_location, unavailable_at
            FROM media_files WHERE message_id = ANY($1::uuid[]) ORDER BY created_at ASC`,
         [ids],
       );
@@ -107,12 +112,12 @@ async function persistAttachments(userId, messageId, files) {
       const created = [];
       for (const w of written) {
         const { rows } = await client.query(
-          `INSERT INTO media_files (message_id, direction, storage_location, file_ref, size_bytes)
-           VALUES ($1, 'input', 'local', $2, $3)
-           RETURNING id, direction, size_bytes`,
-          [messageId, w.fileRef, w.sizeBytes],
+          `INSERT INTO media_files (message_id, direction, storage_location, file_ref, size_bytes, content_type)
+           VALUES ($1, 'input', 'local', $2, $3, $4)
+           RETURNING id, direction, size_bytes, storage_location, content_type, unavailable_at`,
+          [messageId, w.fileRef, w.sizeBytes, w.contentType],
         );
-        created.push({ ...rows[0], content_type: w.contentType });
+        created.push(rows[0]);
       }
       const total = written.reduce((n, w) => n + w.sizeBytes, 0);
       const { rows: u } = await client.query(

@@ -8,7 +8,7 @@ import {
   classifyError,
   errorMessage,
 } from '../openrouter/client.js';
-import { writeUserFile, deleteRef } from '../storage/local.js';
+import { resolveOutputTarget, persistGeneratedOutput } from '../storage/output.js';
 import { loadOwnedChat, mediaView } from './completion.js';
 
 // Fetch the bytes for one normalized image ({ b64 } or { url }). OpenRouter
@@ -36,7 +36,8 @@ async function messageWithAttachments(messageId) {
   );
   if (!rows.length) return null;
   const media = await pool.query(
-    `SELECT id, direction, size_bytes, file_ref FROM media_files WHERE message_id = $1 ORDER BY created_at ASC`,
+    `SELECT id, direction, size_bytes, file_ref, content_type, storage_location, unavailable_at
+       FROM media_files WHERE message_id = $1 ORDER BY created_at ASC`,
     [messageId],
   );
   return {
@@ -97,9 +98,14 @@ export async function generateImage(req, res) {
   }
 
   // Pre-flight storage check: don't spend if we've no room to keep the result.
-  const { rows: u0 } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
-  if (Number(u0[0].storage_used_bytes) >= config.maxLocalBytes) {
-    return res.status(400).json({ error: 'You are at your 5 GB local storage limit. Delete some media first.', category: 'storage' });
+  // Only applies when output lands on local disk — a linked cloud folder doesn't
+  // count against the 5 GB cap.
+  const target = await resolveOutputTarget(userId);
+  if (target.kind === 'local') {
+    const { rows: u0 } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
+    if (Number(u0[0].storage_used_bytes) >= config.maxLocalBytes) {
+      return res.status(400).json({ error: 'You are at your 5 GB local storage limit. Delete some media first.', category: 'storage' });
+    }
   }
 
   // Create the user prompt + a pending assistant row atomically. The partial
@@ -161,17 +167,13 @@ export async function generateImage(req, res) {
     return fail(502, { error: 'The model returned no image.', category: 'model' });
   }
 
-  // Fetch + write every returned image to local storage.
-  const written = [];
+  // Fetch every returned image (URLs aren't assumed durable).
+  let buffers;
   try {
-    for (const img of images) {
-      const { buffer, mimetype } = await bytesFor(img);
-      const { fileRef, sizeBytes } = await writeUserFile(userId, { buffer, mimetype, originalname: 'generated' });
-      written.push({ fileRef, sizeBytes });
-    }
+    buffers = [];
+    for (const img of images) buffers.push(await bytesFor(img));
   } catch (err) {
-    await Promise.all(written.map((w) => deleteRef(w.fileRef)));
-    console.error('[imagegen] fetch/store failed:', err.message);
+    console.error('[imagegen] fetch failed:', err.message);
     return fail(502, { error: 'The image was generated but could not be saved. Please retry.', category: 'model' });
   }
 
@@ -181,39 +183,17 @@ export async function generateImage(req, res) {
   let cost = json?.usage?.cost ?? null;
   if (cost == null) {
     const pr = await modelImagePricing(chat.model_id).catch(() => null);
-    if (pr && (pr.unit === 'image' || pr.unit === 'images')) cost = pr.cost * written.length;
+    if (pr && (pr.unit === 'image' || pr.unit === 'images')) cost = pr.cost * buffers.length;
   }
 
-  // Finalize: media rows + counter + mark the message complete, atomically.
+  // Persist to the resolved target (cloud folder or local disk): media rows +
+  // cost + mark complete + (local-only) counter bump, atomically. Cleans up on
+  // failure.
   try {
-    const c2 = await pool.connect();
-    try {
-      await c2.query('BEGIN');
-      for (const w of written) {
-        await c2.query(
-          `INSERT INTO media_files (message_id, direction, storage_location, file_ref, size_bytes)
-           VALUES ($1, 'output', 'local', $2, $3)`,
-          [assistantId, w.fileRef, w.sizeBytes],
-        );
-      }
-      await c2.query(
-        `UPDATE messages SET metadata = jsonb_set(metadata, '{status}', '"complete"'), cost_usd = $2 WHERE id = $1`,
-        [assistantId, cost],
-      );
-      const total = written.reduce((n, w) => n + w.sizeBytes, 0);
-      await c2.query('UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2', [total, userId]);
-      await c2.query('UPDATE chats SET updated_at = now() WHERE id = $1', [chat.id]);
-      await c2.query('COMMIT');
-    } catch (err) {
-      await c2.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      c2.release();
-    }
+    await persistGeneratedOutput({ userId, messageId: assistantId, chatId: chat.id, buffers, cost });
   } catch (err) {
-    await Promise.all(written.map((w) => deleteRef(w.fileRef)));
-    console.error('[imagegen] finalize failed:', err.message);
-    return fail(500, { error: 'Failed to save the generated image.', category: 'request' });
+    console.error('[imagegen] persist failed:', err.message);
+    return fail(500, { error: 'The image was generated but could not be saved. Please retry.', category: 'request' });
   }
 
   return res.json({ userMessageId: userMsgId, message: await messageWithAttachments(assistantId) });

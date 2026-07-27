@@ -602,4 +602,12 @@ button.danger-solid:hover { filter: brightness(1.08); }
 }
 .storage-bar-fill.warn { background: #d9b24a; }
 .storage-bar-fill.full { background: var(--error); }
+
+/* ── Step 8: cloud storage — unavailable (out-of-band-deleted) media ──── */
+.msg-unavailable {
+  display: inline-flex; align-items: center;
+  max-width: 360px; padding: 0.6rem 0.8rem;
+  border: 1px dashed var(--border); border-radius: 8px;
+  background: #0f1117; color: var(--muted); font-size: 0.85rem;
+}
 button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }

@@ -61,6 +61,24 @@ function fmtVideo(p) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// One image/video attachment. A cloud file the user deleted on the provider side
+// (or whose provider was disconnected) renders as a placeholder instead of a
+// broken thumbnail — either flagged unavailable on the server (out-of-band
+// detection) or caught here via onError when the media fetch 410s.
+function Attachment({ att }) {
+  const [gone, setGone] = useState(Boolean(att.unavailable));
+  if (gone) {
+    return (
+      <div className="msg-unavailable" title="This file was removed from your cloud storage">
+        ⚠ No longer in your cloud storage
+      </div>
+    );
+  }
+  return att.contentType?.startsWith('video/')
+    ? <video src={att.url} className="msg-video" controls preload="metadata" onError={() => setGone(true)} />
+    : <img src={att.url} alt={att.name || 'attachment'} className="msg-image" onError={() => setGone(true)} />;
+}
+
 export default function ChatPage() {
   const { chatId } = useParams();
   const navigate = useNavigate();
@@ -527,9 +545,7 @@ export default function ChatPage() {
                 {m.attachments?.length > 0 && (
                   <div className="msg-attachments">
                     {m.attachments.map((att) => (
-                      att.contentType?.startsWith('video/')
-                        ? <video key={att.id || att.url} src={att.url} className="msg-video" controls preload="metadata" />
-                        : <img key={att.id || att.url} src={att.url} alt={att.name || 'attachment'} className="msg-image" />
+                      <Attachment key={att.id || att.url} att={att} />
                     ))}
                   </div>
                 )}

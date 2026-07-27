@@ -58,4 +58,16 @@ export const config = {
   // the Spend Protection backstop (bible); the disabled button + idempotency key
   // are the primary duplicate-spend guard.
   maxConcurrentVideos: Number(process.env.MAX_CONCURRENT_VIDEOS || 2),
+
+  // Cloud storage — Google Drive (Step 8). OAuth client credentials come from a
+  // Google Cloud project; PUBLIC_BASE_URL is the app's externally-reachable
+  // origin, used to build the OAuth redirect URI. All optional — if unset, Drive
+  // simply isn't offered in Settings. The Google endpoint base URLs are
+  // overridable so the OAuth/API/upload calls can be pointed at a mock in tests.
+  googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, ''),
+  googleAuthBase: (process.env.GOOGLE_AUTH_BASE || 'https://accounts.google.com').replace(/\/$/, ''),
+  googleOauthBase: (process.env.GOOGLE_OAUTH_BASE || 'https://oauth2.googleapis.com').replace(/\/$/, ''),
+  googleApiBase: (process.env.GOOGLE_API_BASE || 'https://www.googleapis.com').replace(/\/$/, ''),
 };
