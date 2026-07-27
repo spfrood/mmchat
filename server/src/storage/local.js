@@ -93,6 +93,18 @@ export async function deleteRef(fileRef) {
   }
 }
 
+// Remove a user's entire local media directory (<storageDir>/<userId>/) — used
+// on account deletion, after the DB rows are gone. resolveRef guards against
+// traversal (userId is a session-derived uuid, but belt-and-braces). Idempotent:
+// a missing directory is fine.
+export async function deleteUserStorageDir(userId) {
+  try {
+    await fs.rm(resolveRef(String(userId)), { recursive: true, force: true });
+  } catch {
+    /* nothing to remove */
+  }
+}
+
 export function readRef(fileRef) {
   return fs.readFile(resolveRef(fileRef));
 }

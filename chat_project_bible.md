@@ -454,12 +454,12 @@ Only relevant once more than one provider can be linked:
 
 ---
 
-## Implementation Notes & Deviations (as built through Step 8)
+## Implementation Notes & Deviations (as built through Step 11)
 
 This section records where the **built** app diverges from, clarifies, or adds
 to the original spec above. The spec captured intent during planning; these are
 the facts discovered during the build. When the two disagree, this section wins
-for anything through Step 8.
+for anything through Step 11.
 
 ### Model catalogues — separate endpoints per modality
 
@@ -676,3 +676,60 @@ accurate than the pure-estimate model the spec described.
   timestamp) and sort ambiguously. Fixed by writing `created_at` with
   `clock_timestamp()` (distinct per statement) and ordering
   `created_at ASC, (role <> 'user') ASC` so the prompt always precedes its output.
+
+### Settings / account menu (Step 11)
+
+All under a new **`server/src/account/`** module (`routes.js` + `service.js`),
+mounted at **`/api/account`**.
+
+- **`cost_usd` was already stored — Step 11 only aggregates it.** The Step 11
+  prompt says to "compute and store `cost_usd` at generation time," but that was
+  already built across Steps 3/5/6 (text/image/video), preferring OpenRouter's
+  reported `usage.cost` (see "`messages.cost_usd` — prefer OpenRouter's reported
+  cost" above). Step 11 added **no** new write-path — the spend dashboard is a
+  read-only aggregation over the existing rows.
+- **Profile = email + password only.** The `users` table carries no display-name
+  or other profile column, so "edit profile" is email + password. The Settings
+  "Profile" section shows the email read-only with an **Edit** button that opens
+  a **modal** (Change email / Change password toggle) — nothing sensitive sits
+  inline on the page. **Either** change requires re-entering the **current
+  password** (`PATCH /api/account/profile`, server-verified). A **password**
+  change also requires a **confirm-password** field (typo guard, client-side)
+  and, server-side, **revokes all trusted devices** + clears this browser's
+  trusted-device cookie (per the bible's "any password change revokes trusted
+  devices"), so TOTP is re-required on next login everywhere. Email uniqueness is
+  enforced (409 on collision).
+- **Credits display reuses the existing endpoint.** No new route — the "View
+  credits" button in the API-key section calls the already-built
+  `GET /api/keys/credits` (→ OpenRouter `GET /auth/key`), shown on demand rather
+  than on every settings load.
+- **Spend dashboard** (`GET /api/account/spend`): all-time + this-calendar-month
+  totals, plus **by-model** and **by-chat** breakdowns, all as `float8`
+  aggregates over `messages.cost_usd` (only rows where it's non-null — i.e.
+  assistant/output turns). Model is `metadata ->> 'model'` with a fallback to the
+  chat's `model_id`. **It only reflects chats the user still has:** deleting a
+  chat cascades its `messages` (and their `cost_usd`), so a heavily-pruned account
+  reads **well below** its true OpenRouter spend — the UI states this explicitly.
+  Still a self-computed estimate ("verify on openrouter.ai"), consistent with the
+  spend-tracking spec.
+- **Delete account** (`DELETE /api/account`) — two confirmation gates: the client
+  requires typing `DELETE`, and the server requires the **current password**.
+  Order: (1) best-effort revoke the Google Drive token at the provider (needs the
+  still-present encrypted refresh token, so it runs first) and drop the account
+  row; (2) `DELETE FROM users` — the FK cascade removes chats, messages,
+  media_files, api_keys, totp_secrets, trusted_devices, storage_accounts; (3)
+  purge the user's `sessions` rows explicitly (connect-pg-simple owns that table —
+  no FK to cascade — matched via `sess ->> 'userId'`); (4) remove the user's local
+  media directory from disk (new helper `deleteUserStorageDir` in
+  `storage/local.js`). **Files already in the user's own Drive are left
+  untouched** (matches the local-deleted / cloud-kept asymmetry from Step 8).
+  Then the current session + cookies are torn down.
+- **"Contact me" button (added, not in original spec).** A Settings "Contact"
+  section with a `mailto:` button, plus text showing the address so it works even
+  without a configured mail client. The address comes from a **`VITE_CONTACT_EMAIL`**
+  env var (client `.env`, gitignored; placeholder in the committed
+  `client/.env.example`) — **not hardcoded**, to keep the deployment domain out of
+  the public repo. The section only renders when the var is set, so it must also
+  be present in the production build env. This is the first client-side env var
+  (previously only the inline `VITE_BEHIND_PROXY` dev flag existed).
+- **No schema migration** — every table/column Step 11 needs already exists.

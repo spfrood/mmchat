@@ -611,3 +611,29 @@ button.danger-solid:hover { filter: brightness(1.08); }
   background: #0f1117; color: var(--muted); font-size: 0.85rem;
 }
 button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+/* ── Step 11: credits + spend dashboard ─────────────────────────── */
+.credits { margin-top: 1rem; }
+.credits-list {
+  list-style: none; padding: 0; margin: 0.75rem 0 0;
+  display: flex; flex-wrap: wrap; gap: 1.5rem;
+}
+.credits-list li { display: flex; flex-direction: column; gap: 0.15rem; }
+.credits-list strong { font-size: 1.05rem; }
+
+.spend-totals { display: flex; gap: 1.5rem; margin-bottom: 0.75rem; }
+.spend-total {
+  flex: 1; display: flex; flex-direction: column; gap: 0.2rem;
+  padding: 0.85rem 1rem; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel);
+}
+.spend-total strong { font-size: 1.35rem; }
+
+.spend-table { width: 100%; border-collapse: collapse; margin: 0.25rem 0 0.5rem; }
+.spend-table td { padding: 0.4rem 0; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.spend-name {
+  max-width: 0; width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.spend-count { text-align: right; padding-right: 1rem; white-space: nowrap; }
+.spend-amt { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }

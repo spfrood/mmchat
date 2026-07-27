@@ -12,6 +12,7 @@ import { keysRouter } from './keys/routes.js';
 import { modelsRouter } from './openrouter/routes.js';
 import { mediaRouter } from './media/routes.js';
 import { storageRouter } from './storage/routes.js';
+import { accountRouter } from './account/routes.js';
 
 const app = express();
 
@@ -68,6 +69,7 @@ app.use('/api/keys', keysRouter);
 app.use('/api/models', modelsRouter);
 app.use('/api/media', mediaRouter);
 app.use('/api/storage', storageRouter);
+app.use('/api/account', accountRouter);
 
 const server = app.listen(config.port, () => {
   console.log(`[mmchat] server listening on http://localhost:${config.port} (${config.env})`);

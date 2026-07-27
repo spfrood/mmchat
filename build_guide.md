@@ -525,6 +525,21 @@ profile editing, credits display, account deletion.
 > When done, stop and tell me how to test all of this, especially account
 > deletion. Wait for my confirmation — this is the last step.
 
+**As built (deviations):** everything lives under a new `server/src/account/`
+module at `/api/account`. **`cost_usd` was already computed + stored** at
+generation time in Steps 3/5/6 (preferring OpenRouter's `usage.cost`), so this
+step added **no** write-path — the spend dashboard is a read-only aggregation.
+"Profile" is email + password only (no other columns exist); it's edited via an
+**Edit button → modal** (change email / change password), current password
+required for either, password change adds a confirm field and revokes trusted
+devices. Credits reuse the existing `GET /api/keys/credits`. The spend dashboard
+**only counts chats the user still has** (deleting a chat cascades its costs),
+which the UI states. Account deletion requires typed `DELETE` **and** the current
+password. A **"Contact me"** button was added (not in the original spec), its
+address sourced from a gitignored `VITE_CONTACT_EMAIL` env var so the deployment
+domain stays out of the repo. **No schema migration.** See the bible's
+"Implementation Notes & Deviations → Settings / account menu (Step 11)".
+
 **You test:**
 - [ ] Profile edits save and persist
 - [ ] Credits display matches what's shown on openrouter.ai for that key
