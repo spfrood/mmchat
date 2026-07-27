@@ -71,6 +71,20 @@ export async function modelSupportsImageInput(modelId) {
   return m ? inputModalities(m).includes('image') : false;
 }
 
+// Whether an image-GENERATION model accepts image input (image-to-image / edit).
+// Image models live on their own catalogue (/images/models), NOT the chat
+// catalogue, so modelSupportsImageInput (which searches /models) never finds
+// them — this checks the right list.
+export async function imageModelSupportsImageInput(modelId) {
+  try {
+    const data = await rawImageModels();
+    const m = data.find((x) => x.id === modelId);
+    return m ? inputModalities(m).includes('image') : false;
+  } catch {
+    return false;
+  }
+}
+
 // Returns a trimmed, client-safe model list filtered by output modality.
 // modality: 'text' (default) | 'image' | 'video' | 'all'.
 // Video models live on a SEPARATE catalogue endpoint (/videos/models) rather
@@ -277,14 +291,37 @@ export async function listVideoModels() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Whether a video-GENERATION model accepts an input frame image (image-to-video).
+// The video catalogue has its own schema (no architecture.input_modalities) —
+// image-to-video capability is exposed as `supported_frame_images`, a non-empty
+// array of accepted frame slots (e.g. ["first_frame"] / ["first_frame","last_frame"];
+// null means text-to-video only, e.g. sora-2-pro).
+export async function videoModelSupportsImageInput(modelId) {
+  try {
+    const data = await rawVideoModels();
+    const m = data.find((x) => x.id === modelId);
+    return Boolean(m && Array.isArray(m.supported_frame_images) && m.supported_frame_images.length);
+  } catch {
+    return false;
+  }
+}
+
 // ── video generation (async: submit -> poll -> fetch bytes) ─────────────────
 // Submit a job. Returns the raw Response; on success the body carries
 // { id, polling_url, status }. We never wait for completion here.
-export function submitVideo({ key, model, prompt, options = {}, signal }) {
+// frameImages: optional array of frame objects for image-to-video, shaped
+// { type:'image_url', image_url:{ url }, frame_type:'first_frame'|'last_frame' }
+// (url is an HTTP(S) URL or a base64 data URI). OpenRouter carries these as
+// `frame_images`; omitted entirely for plain text-to-video.
+export function submitVideo({ key, model, prompt, options = {}, frameImages, signal }) {
+  const body = { model, prompt, ...options };
+  if (Array.isArray(frameImages) && frameImages.length) {
+    body.frame_images = frameImages;
+  }
   return fetch(`${BASE}/videos`, {
     method: 'POST',
     headers: authHeaders(key),
-    body: JSON.stringify({ model, prompt, ...options }),
+    body: JSON.stringify(body),
     signal,
   });
 }
@@ -352,11 +389,19 @@ export async function getKeyInfo(key) {
 // ── image generation (Unified Image API) ───────────────────────────────────
 // Returns the raw fetch Response so the caller can surface OpenRouter errors
 // (bad key/credits/model) the same way the chat path does.
-export function generateImages({ key, model, prompt, signal }) {
+// inputReferences: optional array of image reference objects for image-to-image
+// / editing, shaped { type: 'image_url', image_url: { url } } where url is an
+// HTTP(S) URL or a base64 data URI. OpenRouter carries these as `input_references`
+// on POST /images; omitted entirely for plain text-to-image.
+export function generateImages({ key, model, prompt, inputReferences, signal }) {
+  const body = { model, prompt };
+  if (Array.isArray(inputReferences) && inputReferences.length) {
+    body.input_references = inputReferences;
+  }
   return fetch(`${BASE}/images`, {
     method: 'POST',
     headers: authHeaders(key),
-    body: JSON.stringify({ model, prompt }),
+    body: JSON.stringify(body),
     signal,
   });
 }

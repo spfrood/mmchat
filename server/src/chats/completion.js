@@ -100,7 +100,7 @@ export async function listMessages(req, res) {
 // storage, insert media_files (direction 'input'), and bump the user's
 // storage_used_bytes counter — all under one transaction. On failure, unlink
 // any files already written. Returns the created media rows (for the response).
-async function persistAttachments(userId, messageId, files) {
+export async function persistAttachments(userId, messageId, files) {
   const written = [];
   try {
     for (const f of files) {

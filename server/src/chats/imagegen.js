@@ -5,11 +5,13 @@ import {
   generateImages,
   extractImages,
   modelImagePricing,
+  imageModelSupportsImageInput,
   classifyError,
   errorMessage,
 } from '../openrouter/client.js';
 import { resolveOutputTarget, persistGeneratedOutput } from '../storage/output.js';
-import { loadOwnedChat, mediaView } from './completion.js';
+import { loadOwnedChat, mediaView, persistAttachments } from './completion.js';
+import { isSupportedImage } from '../storage/local.js';
 
 // Fetch the bytes for one normalized image ({ b64 } or { url }). OpenRouter
 // output URLs are NOT assumed durable, so we fetch immediately (bible:
@@ -56,7 +58,10 @@ async function messageWithAttachments(messageId) {
 // by a per-chat pending lock (the partial unique index from migration 003).
 export async function generateImage(req, res) {
   const userId = req.session.userId;
+  // multipart (JSON fields arrive as strings) when reference images are attached;
+  // plain JSON otherwise. req.files is populated by multer only for multipart.
   const { prompt, idempotencyKey } = req.body || {};
+  const files = Array.isArray(req.files) ? req.files : [];
 
   let chat;
   try {
@@ -74,6 +79,35 @@ export async function generateImage(req, res) {
   }
   if (!chat.model_id) {
     return res.status(400).json({ error: 'Choose an image model first.', category: 'model' });
+  }
+
+  // Reference-image validation (before any spend or DB writes). Mirrors the text
+  // path: supported types only, model must accept image input, and input media
+  // counts against the local cap.
+  if (files.length) {
+    const bad = files.find((f) => !isSupportedImage(f.mimetype));
+    if (bad) {
+      return res.status(400).json({
+        error: `Unsupported attachment type: ${bad.mimetype}. Attach an image (PNG, JPEG, WebP, GIF).`,
+        category: 'request',
+      });
+    }
+    let acceptsImage = false;
+    try { acceptsImage = await imageModelSupportsImageInput(chat.model_id); } catch { acceptsImage = false; }
+    if (!acceptsImage) {
+      return res.status(400).json({
+        error: 'This image model does not accept a reference image. Choose one that supports image input.',
+        category: 'model',
+      });
+    }
+    const incoming = files.reduce((n, f) => n + f.size, 0);
+    const { rows: u } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
+    if (Number(u[0].storage_used_bytes) + incoming > config.maxLocalBytes) {
+      return res.status(400).json({
+        error: 'This upload would exceed your 5 GB local storage limit. Delete some media first.',
+        category: 'storage',
+      });
+    }
   }
 
   // Idempotent replay: same key already produced (or is producing) a result.
@@ -149,16 +183,37 @@ export async function generateImage(req, res) {
     return res.status(status).json({ ...body, userMessageId: userMsgId });
   };
 
+  // Persist reference images onto the user turn (input media: local + counted),
+  // then build the OpenRouter input_references payload from the same in-memory
+  // buffers. A persist failure aborts before any spend.
+  let userAttachments = [];
+  let inputReferences;
+  if (files.length) {
+    try {
+      const r = await persistAttachments(userId, userMsgId, files);
+      userAttachments = r.created.map(mediaView);
+    } catch (err) {
+      console.error('[imagegen] attachment persist failed:', err.message);
+      return fail(500, { error: 'Failed to store the reference image.', category: 'request' });
+    }
+    inputReferences = files.map((f) => ({
+      type: 'image_url',
+      image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString('base64')}` },
+    }));
+  }
+
   let orRes;
   try {
-    orRes = await generateImages({ key, model: chat.model_id, prompt: text });
-  } catch {
+    orRes = await generateImages({ key, model: chat.model_id, prompt: text, inputReferences });
+  } catch (err) {
+    console.error('[imagegen] OpenRouter request failed:', err?.message);
     return fail(502, { error: 'Could not reach OpenRouter. Try again shortly.', category: 'model' });
   }
 
   if (!orRes.ok) {
     let orError = null;
     try { orError = (await orRes.json())?.error; } catch { /* non-JSON */ }
+    console.error(`[imagegen] OpenRouter ${orRes.status} for ${chat.model_id}${inputReferences ? ` (with ${inputReferences.length} reference image(s))` : ''}:`, errorMessage(orError, '(no message)'));
     const status = orRes.status >= 400 && orRes.status < 600 ? orRes.status : 502;
     return fail(status, { error: errorMessage(orError, `OpenRouter returned HTTP ${orRes.status}.`), category: classifyError(orRes.status, orError) });
   }
@@ -200,5 +255,9 @@ export async function generateImage(req, res) {
     return fail(500, { error: 'The image was generated but could not be saved. Please retry.', category: 'request' });
   }
 
-  return res.json({ userMessageId: userMsgId, message: await messageWithAttachments(assistantId) });
+  return res.json({
+    userMessageId: userMsgId,
+    userAttachments,
+    message: await messageWithAttachments(assistantId),
+  });
 }

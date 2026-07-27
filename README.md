@@ -13,7 +13,7 @@ Text, image, and video chat, each backed by OpenRouter's respective API
 Live model picker with search, modality filtering, and pricing shown inline
 Provider routing controls (price/speed sort, data-privacy preference) for models served by multiple underlying providers
 Spend dashboard: total cost, plus breakdown by model and by chat
-Vision-model support via image/file attachments as chat input
+Image input across all three modalities: attach images to vision text models, as reference images for image-to-image editing, or as a first frame for image-to-video
 BYOK — your own OpenRouter API key, encrypted at rest, never exposed after initial save
 Local storage with optional linked cloud folders (Google Drive, Dropbox, OneDrive), with user-set priority order and per-provider quotas, so you're not capped by local disk alone
 Password + TOTP two-factor auth, with a "trusted device" option so TOTP isn't required on every login

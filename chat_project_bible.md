@@ -115,10 +115,13 @@ admin account (sets password, enrolls TOTP, shows backup codes once).
   multiple tabs.
 - Each chat has: one model, one modality (text / image / video), one message
   thread
-- **User-uploaded input**: text/image-capable chats support attaching a file
-  (image, document) to a message as input, not just receiving generated output.
-  Uploaded input files count against the same 5GB local cap / cloud-folder
-  offload as generated output — see schema update below.
+- **User-uploaded input**: all three modalities support attaching an image as
+  input where the model accepts it — vision text models (image in the prompt),
+  image-generation models (a reference image for image-to-image / editing), and
+  video-generation models (a first-frame image for image-to-video). See
+  "Image input across modalities" under Implementation Notes for the per-modality
+  request shapes. Uploaded input files count against the same 5GB local cap /
+  cloud-folder offload as generated output — see schema update below.
 - **Model picker**:
   - Pulls live list from `GET /api/v1/models`, filtered server-side by modality
     via `output_modalities` (`text`, `image`, or `all`). Default (no param)
@@ -152,9 +155,9 @@ admin account (sets password, enrolls TOTP, shows backup codes once).
 
 | Modality | Endpoint | Notes |
 |---|---|---|
-| Text | `POST /api/v1/chat/completions` | Streamable |
-| Image | `POST /api/v1/images` (Unified Image API) | Standardized request shape across 30+ models |
-| Video | `POST /api/v1/videos` | **Asynchronous** — job submitted, then polled or pushed via `video.generation.completed` event. Confirm exact completion mechanism (webhook vs poll) against current OpenRouter docs before building this path. |
+| Text | `POST /api/v1/chat/completions` | Streamable. Image input via `image_url` content parts. |
+| Image | `POST /api/v1/images` (Unified Image API) | Standardized request shape across 30+ models. Image-to-image via `input_references` (see Implementation Notes). |
+| Video | `POST /api/v1/videos` | **Asynchronous** — job submitted, then polled or pushed via `video.generation.completed` event. Confirm exact completion mechanism (webhook vs poll) against current OpenRouter docs before building this path. Image-to-video via `frame_images` (first-frame). |
 | Credits | `GET /api/v1/auth/key` | Uses the user's own key as bearer token; returns rate limit / credit info for that key. This is what powers the "view credits" link in the profile page. |
 
 **Key storage**: user's OpenRouter API key encrypted at rest, AES-256-GCM, server-
@@ -454,12 +457,12 @@ Only relevant once more than one provider can be linked:
 
 ---
 
-## Implementation Notes & Deviations (as built through Step 11)
+## Implementation Notes & Deviations (as built through Step 11 + enhancements)
 
 This section records where the **built** app diverges from, clarifies, or adds
 to the original spec above. The spec captured intent during planning; these are
 the facts discovered during the build. When the two disagree, this section wins
-for anything through Step 11.
+for anything through Step 11 (and the post-Step-11 enhancements noted as such).
 
 ### Model catalogues — separate endpoints per modality
 
@@ -477,6 +480,39 @@ The "Model Picker" spec assumes one list (`GET /api/v1/models`, filtered by
 The picker is also **locked to the chat's modality** (no in-picker modality
 selector) — a mismatched pick only errors on send, so it isn't offered. The
 optional keyword "specialty filter" (coding/vision/reasoning) was **not built**.
+
+### Image input across modalities (post-Step-11 enhancement)
+
+All three modalities accept an **uploaded image as input** when the chosen model
+supports it. The composer's attach control is gated on a per-model capability
+check, and the same image is both persisted as `input` media (local, counted
+against the cap — like the text-vision path) and sent to OpenRouter:
+
+- **Text (vision):** image embedded as an `image_url` content part on the chat
+  message. Capability: `input_modalities` includes `image` on `/models`.
+- **Image (image-to-image / edit):** sent to `POST /images` as
+  **`input_references`** — `[{ type:'image_url', image_url:{ url } }]`. Capability:
+  `input_modalities` includes `image` on **`/images/models`** (the image
+  catalogue, *not* `/models`).
+- **Video (image-to-video):** the first uploaded image sent to `POST /videos` as
+  **`frame_images`** — `[{ type:'image_url', image_url:{ url }, frame_type:'first_frame' }]`;
+  capped at one first-frame image. Capability: **`supported_frame_images`** is a
+  non-empty array on **`/videos/models`** (that catalogue has *no*
+  `architecture.input_modalities`; `null` here means text-to-video only, e.g.
+  `openai/sora-2-pro`).
+
+`image_url.url` is a **base64 data URI** in every case (OpenRouter accepts data
+URIs on all three; no public URL needed). The capability lookup is one endpoint —
+`GET /api/models/capabilities?id=&modality=` — which routes to the right
+catalogue by modality; **the chat `/models` list never contains image/video-gen
+models**, so checking it for them always returned false (the original bug). Only
+**images** may be uploaded (never video files). Reference/first-frame input stays
+**local** even when generated output routes to cloud.
+
+> **Infra note:** media uploads pass through the reverse proxy, so its body-size
+> limit must exceed the app's per-file upload cap (multer: 20 MB). nginx's 1 MB
+> default silently `413`s real images before they reach Express — see the deploy
+> host's server reference for the `client_max_body_size` setting.
 
 ### Pricing — source, units, and accuracy
 
@@ -548,7 +584,9 @@ accurate than the pure-estimate model the spec described.
 
 - Generated **video** output reuses the same local-storage mechanism as images;
   video mime types (mp4/webm/mov/mkv) are handled. `isSupportedImage()` stays
-  image-only (uploads are image input only; video is output only).
+  image-only — **only images can be uploaded** (as vision input, an image-gen
+  reference, or a video first frame); video files are never user-uploaded, only
+  generated as output.
 
 ### Local storage accounting (Step 7)
 

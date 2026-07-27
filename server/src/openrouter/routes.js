@@ -1,6 +1,13 @@
 import { Router } from 'express';
 import { requireAuth } from '../auth/middleware.js';
-import { listModels, modelSupportsImageInput, modelImagePricing, modelVideoPrice } from './client.js';
+import {
+  listModels,
+  modelSupportsImageInput,
+  imageModelSupportsImageInput,
+  videoModelSupportsImageInput,
+  modelImagePricing,
+  modelVideoPrice,
+} from './client.js';
 
 // /api/models — the live OpenRouter model catalogue for the picker. Public data
 // (no user key needed), but gated behind a session. Default modality is text.
@@ -22,13 +29,22 @@ modelsRouter.get('/', async (req, res) => {
 });
 
 // Capability lookup for a single model id (used to gate the image-attach
-// control). Fails soft: on any error, report no image support.
+// control). Fails soft: on any error, report no image support. The image-input
+// check must consult the catalogue that actually lists the model — image-
+// generation models live on /images/models, not the chat /models list — so it's
+// routed by the caller's chat modality.
 modelsRouter.get('/capabilities', async (req, res) => {
   const id = String(req.query.id || '');
   if (!id) return res.status(400).json({ error: 'id is required' });
+  const modality = ALLOWED.includes(req.query.modality) ? req.query.modality : 'text';
+  const supportsImageInputFor = modality === 'image'
+    ? imageModelSupportsImageInput
+    : modality === 'video'
+      ? videoModelSupportsImageInput
+      : modelSupportsImageInput;
   try {
     const [supportsImageInput, imagePricing, videoPrice] = await Promise.all([
-      modelSupportsImageInput(id),
+      supportsImageInputFor(id),
       modelImagePricing(id),
       modelVideoPrice(id),
     ]);

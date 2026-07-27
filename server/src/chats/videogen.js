@@ -8,11 +8,13 @@ import {
   extractVideoUrls,
   videoStatus,
   modelVideoPrice,
+  videoModelSupportsImageInput,
   classifyError,
   errorMessage,
 } from '../openrouter/client.js';
 import { resolveOutputTarget, persistGeneratedOutput } from '../storage/output.js';
-import { loadOwnedChat, mediaView } from './completion.js';
+import { loadOwnedChat, mediaView, persistAttachments } from './completion.js';
+import { isSupportedImage } from '../storage/local.js';
 
 // Video generation is ASYNCHRONOUS (bible: OpenRouter's /videos endpoint submits
 // a job, then completion is polled). Confirmed against current OpenRouter docs:
@@ -70,6 +72,9 @@ async function markFailed(messageId, message) {
 export async function submitVideoJob(req, res) {
   const userId = req.session.userId;
   const { prompt, idempotencyKey } = req.body || {};
+  // Image-to-video takes a single first-frame image; if several are uploaded we
+  // use the first (multipart only — plain JSON leaves req.files empty).
+  const frameFile = (Array.isArray(req.files) ? req.files : [])[0] || null;
 
   let chat;
   try {
@@ -87,6 +92,32 @@ export async function submitVideoJob(req, res) {
   }
   if (!chat.model_id) {
     return res.status(400).json({ error: 'Choose a video model first.', category: 'model' });
+  }
+
+  // First-frame validation (before any spend or DB writes): supported type, the
+  // model must accept a frame image, and input media counts against the local cap.
+  if (frameFile) {
+    if (!isSupportedImage(frameFile.mimetype)) {
+      return res.status(400).json({
+        error: `Unsupported attachment type: ${frameFile.mimetype}. Attach an image (PNG, JPEG, WebP, GIF).`,
+        category: 'request',
+      });
+    }
+    let acceptsFrame = false;
+    try { acceptsFrame = await videoModelSupportsImageInput(chat.model_id); } catch { acceptsFrame = false; }
+    if (!acceptsFrame) {
+      return res.status(400).json({
+        error: 'This video model does not accept a first-frame image. Choose one that supports image-to-video.',
+        category: 'model',
+      });
+    }
+    const { rows: u } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
+    if (Number(u[0].storage_used_bytes) + frameFile.size > config.maxLocalBytes) {
+      return res.status(400).json({
+        error: 'This upload would exceed your 5 GB local storage limit. Delete some media first.',
+        category: 'storage',
+      });
+    }
   }
 
   // Idempotent replay: same key already submitted — return that message as-is.
@@ -178,10 +209,31 @@ export async function submitVideoJob(req, res) {
     return res.status(status).json({ ...body, userMessageId: userMsgId });
   };
 
+  // Persist the first-frame image onto the user turn (input media: local +
+  // counted) and build the OpenRouter frame_images payload from the same buffer.
+  // A persist failure aborts before submitting the (billable) job.
+  let userAttachments = [];
+  let frameImages;
+  if (frameFile) {
+    try {
+      const r = await persistAttachments(userId, userMsgId, [frameFile]);
+      userAttachments = r.created.map(mediaView);
+    } catch (err) {
+      console.error('[videogen] frame persist failed:', err.message);
+      return fail(500, { error: 'Failed to store the first-frame image.', category: 'request' });
+    }
+    frameImages = [{
+      type: 'image_url',
+      image_url: { url: `data:${frameFile.mimetype};base64,${frameFile.buffer.toString('base64')}` },
+      frame_type: 'first_frame',
+    }];
+  }
+
   let orRes;
   try {
-    orRes = await submitVideo({ key, model: chat.model_id, prompt: text });
-  } catch {
+    orRes = await submitVideo({ key, model: chat.model_id, prompt: text, frameImages });
+  } catch (err) {
+    console.error('[videogen] OpenRouter submit failed:', err?.message);
     return fail(502, { error: 'Could not reach OpenRouter. Try again shortly.', category: 'model' });
   }
 
@@ -209,7 +261,11 @@ export async function submitVideoJob(req, res) {
   );
   await pool.query('UPDATE chats SET updated_at = now() WHERE id = $1', [chat.id]);
 
-  return res.json({ userMessageId: userMsgId, message: await loadMessageView(assistantId) });
+  return res.json({
+    userMessageId: userMsgId,
+    userAttachments,
+    message: await loadMessageView(assistantId),
+  });
 }
 
 // POST /api/chats/:id/videos/reconcile — re-check every still-pending video job

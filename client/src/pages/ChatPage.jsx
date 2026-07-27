@@ -113,6 +113,8 @@ export default function ChatPage() {
   const isImage = chat?.modality === 'image';
   const isVideo = chat?.modality === 'video';
   const isText = chat?.modality === 'text';
+  // Video takes a single first-frame image; text/image allow a small set.
+  const attachMax = isVideo ? 1 : MAX_ATTACH;
 
   // provider routing
   const [sort, setSort] = useState(() => lsGet('mmchat.sort', 'price'));
@@ -151,11 +153,11 @@ export default function ChatPage() {
   useEffect(() => {
     if (!chat?.modelId) { setVisionSupported(false); setImagePrice(null); setImageUnit(null); setVideoPrice(null); return; }
     let alive = true;
-    api(`/models/capabilities?id=${encodeURIComponent(chat.modelId)}`)
+    api(`/models/capabilities?id=${encodeURIComponent(chat.modelId)}&modality=${encodeURIComponent(chat.modality)}`)
       .then((r) => { if (alive) { setVisionSupported(!!r.supportsImageInput); setImagePrice(r.imagePrice ?? null); setImageUnit(r.imageUnit ?? null); setVideoPrice(r.videoPrice ?? null); } })
       .catch(() => { if (alive) { setVisionSupported(false); setImagePrice(null); setImageUnit(null); setVideoPrice(null); } });
     return () => { alive = false; };
-  }, [chat?.modelId]);
+  }, [chat?.modelId, chat?.modality]);
 
   // Clear staged attachments when switching chats.
   useEffect(() => { setAttachments([]); }, [chatId]);
@@ -248,7 +250,7 @@ export default function ChatPage() {
     e.target.value = ''; // let the same file be re-picked later
     if (!chosen.length) return;
     const images = chosen.filter((f) => f.type.startsWith('image/'));
-    const room = Math.max(0, MAX_ATTACH - attachments.length);
+    const room = Math.max(0, attachMax - attachments.length);
     const next = images.slice(0, room).map((f) => ({ file: f, url: URL.createObjectURL(f), name: f.name, type: f.type }));
     setAttachments((a) => [...a, ...next]);
     if (images.length < chosen.length) {
@@ -341,29 +343,56 @@ export default function ChatPage() {
       setError({ category: 'model', message: 'Choose an image model first.' });
       return;
     }
+    const files = attachments;
+    if (files.length && !visionSupported) {
+      setError({ category: 'model', message: 'This image model does not accept a reference image. Choose one that supports image input.' });
+      return;
+    }
     setError(null);
     setInput('');
+    setAttachments([]);
+    // Optimistic bubble reuses the local preview URLs (kept valid this session).
+    const previews = files.map((a) => ({ url: a.url, contentType: a.type, name: a.name }));
     const key = crypto.randomUUID();
     const tempUser = `temp-${Date.now()}`;
     const tempAsst = `pending-${Date.now()}`;
     setMessages((m) => [
       ...m,
-      { id: tempUser, role: 'user', content: prompt },
+      { id: tempUser, role: 'user', content: prompt, attachments: previews },
       { id: tempAsst, role: 'assistant', content: null, status: 'pending', contentType: 'image' },
     ]);
     setGenerating(true);
+
+    let body;
+    if (files.length) {
+      body = new FormData();
+      body.append('prompt', prompt);
+      body.append('idempotencyKey', key);
+      for (const a of files) body.append('files', a.file);
+    } else {
+      body = { prompt, idempotencyKey: key };
+    }
+
     try {
-      const res = await api(`/chats/${chat.id}/images`, { method: 'POST', body: { prompt, idempotencyKey: key } });
+      const res = await api(`/chats/${chat.id}/images`, { method: 'POST', body });
       setMessages((m) => m
-        .map((x) => (x.id === tempUser ? { ...x, id: res.userMessageId || x.id } : x))
+        .map((x) => (x.id === tempUser
+          ? { ...x, id: res.userMessageId || x.id, attachments: res.userAttachments?.length ? res.userAttachments : x.attachments }
+          : x))
         .map((x) => (x.id === tempAsst ? res.message : x)));
     } catch (err) {
-      setError({ category: err.data?.category || 'model', message: err.message });
+      // A 413 comes from the proxy (upload larger than it allows), not the model
+      // — don't mislabel it "try a different model". Fall back to 'request', not
+      // 'model', for any error the API didn't categorise itself.
+      const message = err.status === 413
+        ? 'That image is too large to upload. Try a smaller file.'
+        : err.message;
+      setError({ category: err.status === 413 ? 'request' : (err.data?.category || 'request'), message });
       setMessages((m) => m.filter((x) => x.id !== tempAsst)); // drop the pending placeholder
     } finally {
       setGenerating(false);
       refresh();
-      refreshStorage(); // a generated image was written to local storage
+      refreshStorage(); // a generated image (and any reference upload) touched local storage
     }
   }
 
@@ -377,6 +406,10 @@ export default function ChatPage() {
       setError({ category: 'model', message: 'Choose a video model first.' });
       return;
     }
+    if (attachments.length && !visionSupported) {
+      setError({ category: 'model', message: 'This video model does not accept a first-frame image. Choose one that supports image-to-video.' });
+      return;
+    }
     setError(null);
     setVideoConfirm({ prompt });
   }
@@ -385,27 +418,47 @@ export default function ChatPage() {
     const prompt = videoConfirm?.prompt?.trim();
     setVideoConfirm(null);
     if (!prompt) return;
+    const files = attachments; // the optional first-frame image
     setInput('');
+    setAttachments([]);
+    const previews = files.map((a) => ({ url: a.url, contentType: a.type, name: a.name }));
     const key = crypto.randomUUID();
     const tempUser = `temp-${Date.now()}`;
     const tempAsst = `pending-${Date.now()}`;
     setMessages((m) => [
       ...m,
-      { id: tempUser, role: 'user', content: prompt },
+      { id: tempUser, role: 'user', content: prompt, attachments: previews },
       { id: tempAsst, role: 'assistant', content: null, status: 'pending', contentType: 'video', jobStatus: 'submitting' },
     ]);
     setGenerating(true);
+
+    let body;
+    if (files.length) {
+      body = new FormData();
+      body.append('prompt', prompt);
+      body.append('idempotencyKey', key);
+      for (const a of files) body.append('files', a.file);
+    } else {
+      body = { prompt, idempotencyKey: key };
+    }
+
     try {
-      const res = await api(`/chats/${chat.id}/videos`, { method: 'POST', body: { prompt, idempotencyKey: key } });
+      const res = await api(`/chats/${chat.id}/videos`, { method: 'POST', body });
       setMessages((m) => m
-        .map((x) => (x.id === tempUser ? { ...x, id: res.userMessageId || x.id } : x))
+        .map((x) => (x.id === tempUser
+          ? { ...x, id: res.userMessageId || x.id, attachments: res.userAttachments?.length ? res.userAttachments : x.attachments }
+          : x))
         .map((x) => (x.id === tempAsst ? res.message : x)));
     } catch (err) {
-      setError({ category: err.data?.category || 'model', message: err.message });
+      const message = err.status === 413
+        ? 'That image is too large to upload. Try a smaller file.'
+        : err.message;
+      setError({ category: err.status === 413 ? 'request' : (err.data?.category || 'request'), message });
       setMessages((m) => m.filter((x) => x.id !== tempAsst)); // drop the pending placeholder
     } finally {
       setGenerating(false);
       refresh();
+      refreshStorage(); // a first-frame upload may have changed local usage
     }
   }
 
@@ -594,7 +647,7 @@ export default function ChatPage() {
 
       {/* composer */}
       <div className="composer-wrap">
-        {isText && attachments.length > 0 && (
+        {(isText || isImage || isVideo) && attachments.length > 0 && (
           <div className="attach-chips">
             {attachments.map((a, i) => (
               <div key={a.url} className="chip">
@@ -606,14 +659,16 @@ export default function ChatPage() {
           </div>
         )}
         <div className="composer">
-          {isText && (
+          {(isText || isImage || isVideo) && (
             <>
-              <input ref={fileInputRef} type="file" accept="image/*" multiple hidden onChange={onPickFiles} />
+              <input ref={fileInputRef} type="file" accept="image/*" multiple={!isVideo} hidden onChange={onPickFiles} />
               <button
                 className="attach-btn"
-                title={visionSupported ? 'Attach image(s)' : 'This model does not accept image input'}
+                title={visionSupported
+                  ? (isVideo ? 'Attach a first-frame image' : isImage ? 'Attach reference image(s)' : 'Attach image(s)')
+                  : (isVideo ? 'This video model does not accept a first-frame image' : isImage ? 'This image model does not accept a reference image' : 'This model does not accept image input')}
                 aria-label="Attach image"
-                disabled={!visionSupported || streaming || attachments.length >= MAX_ATTACH}
+                disabled={!visionSupported || streaming || generating || videoPending || attachments.length >= attachMax}
                 onClick={() => fileInputRef.current?.click()}
               >
                 📎

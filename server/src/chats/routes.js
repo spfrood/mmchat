@@ -213,8 +213,8 @@ chatsRouter.patch('/:id', async (req, res) => {
 // ── messages (thread + send) ────────────────────────────────────────────────
 chatsRouter.get('/:id/messages', listMessages);
 chatsRouter.post('/:id/messages', uploadAttachments, sendMessage);
-chatsRouter.post('/:id/images', generateImage);
-chatsRouter.post('/:id/videos', submitVideoJob);
+chatsRouter.post('/:id/images', uploadAttachments, generateImage);
+chatsRouter.post('/:id/videos', uploadAttachments, submitVideoJob);
 chatsRouter.post('/:id/videos/reconcile', reconcileVideos);
 
 // Delete a chat. The FK cascade removes its messages + media_files rows, but

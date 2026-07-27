@@ -10,10 +10,13 @@ export class ApiError extends Error {
 }
 
 export async function api(path, { method = 'GET', body } = {}) {
+  // FormData bodies are sent as-is so the browser sets the multipart boundary;
+  // everything else is JSON-encoded.
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
   const res = await fetch(`/api${path}`, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
+    headers: body && !isForm ? { 'Content-Type': 'application/json' } : {},
+    body: body == null ? undefined : isForm ? body : JSON.stringify(body),
     credentials: 'include',
   });
   const data = await res.json().catch(() => ({}));

@@ -1,0 +1,9676 @@
+# mmchat — Repository Bundle
+
+A single-document export of the entire mmchat project (source + docs) for long-context LLM analysis and Q&A. Generated from `git ls-files` (vendor/build/lockfiles and real `.env` secrets excluded).
+
+## 1. Topology Summary
+
+File tree (excludes `node_modules/`, `.git/`, build output, `package-lock.json`, this bundle file, and gitignored runtime dirs such as `storage/` and real `.env` files):
+
+```text
+mmchat/
+  ├── client/
+  │   ├── src/
+  │   │   ├── auth/
+  │   │   │   ├── AuthContext.jsx
+  │   │   │   └── EnrollTotp.jsx
+  │   │   ├── chat/
+  │   │   │   ├── ChatLayout.jsx
+  │   │   │   ├── ChatsContext.jsx
+  │   │   │   ├── ModelPicker.jsx
+  │   │   │   ├── Sidebar.jsx
+  │   │   │   ├── StorageContext.jsx
+  │   │   │   ├── StorageNotice.jsx
+  │   │   │   ├── stream.js
+  │   │   │   └── VideoConfirm.jsx
+  │   │   ├── pages/
+  │   │   │   ├── ChatIndex.jsx
+  │   │   │   ├── ChatPage.jsx
+  │   │   │   ├── LoginPage.jsx
+  │   │   │   ├── RegisterPage.jsx
+  │   │   │   └── SettingsPage.jsx
+  │   │   ├── api.js
+  │   │   ├── App.jsx
+  │   │   ├── main.jsx
+  │   │   └── styles.css
+  │   ├── .env.example
+  │   ├── index.html
+  │   ├── package.json
+  │   └── vite.config.js
+  ├── server/
+  │   ├── db/
+  │   │   ├── migrations/
+  │   │   │   ├── 001_initial_schema.sql
+  │   │   │   ├── 002_invite_is_admin.sql
+  │   │   │   ├── 003_pending_generation_guard.sql
+  │   │   │   └── 004_cloud_storage.sql
+  │   │   └── migrate.js
+  │   ├── scripts/
+  │   │   ├── create-invite.js
+  │   │   ├── recompute-storage.js
+  │   │   └── reset-user.js
+  │   ├── src/
+  │   │   ├── account/
+  │   │   │   ├── routes.js
+  │   │   │   └── service.js
+  │   │   ├── auth/
+  │   │   │   ├── invites.js
+  │   │   │   ├── middleware.js
+  │   │   │   ├── password.js
+  │   │   │   ├── routes.js
+  │   │   │   ├── totp.js
+  │   │   │   └── trustedDevice.js
+  │   │   ├── chats/
+  │   │   │   ├── completion.js
+  │   │   │   ├── imagegen.js
+  │   │   │   ├── routes.js
+  │   │   │   └── videogen.js
+  │   │   ├── crypto/
+  │   │   │   ├── encryption.js
+  │   │   │   └── tokens.js
+  │   │   ├── keys/
+  │   │   │   ├── routes.js
+  │   │   │   └── service.js
+  │   │   ├── media/
+  │   │   │   └── routes.js
+  │   │   ├── openrouter/
+  │   │   │   ├── client.js
+  │   │   │   └── routes.js
+  │   │   ├── storage/
+  │   │   │   ├── providers/
+  │   │   │   │   └── googleDrive.js
+  │   │   │   ├── accounting.js
+  │   │   │   ├── accounts.js
+  │   │   │   ├── local.js
+  │   │   │   ├── output.js
+  │   │   │   └── routes.js
+  │   │   ├── config.js
+  │   │   ├── db.js
+  │   │   └── index.js
+  │   ├── .env.example
+  │   └── package.json
+  ├── .gitignore
+  ├── AGENTS.md
+  ├── build_guide.md
+  ├── chat_project_bible.md
+  ├── package.json
+  └── README.md
+```
+
+## 2. System Architecture & Tech Stack
+
+**mmchat** is a BYOK (bring-your-own-key) multi-user web chat client for comparing
+outputs across LLMs, image-generation, and video-generation models via
+**OpenRouter**. Comparison is manual (one model per chat; open another tab for a
+second model). Invite-only, multi-user, not publicized.
+
+### Repository shape
+- **npm workspaces monorepo** — root `package.json` orchestrates two workspaces:
+  `client/` (React + Vite) and `server/` (Node + Express). Dev is run with
+  `concurrently` via `npm run dev` / `npm run dev:proxy`.
+
+### Frontend (`client/`)
+- **React 18 + Vite 6**, `react-router-dom` for routing (ESM, JSX).
+- Plain hand-written CSS (`src/styles.css`) — no UI framework.
+- State via React Context: `AuthContext` (session user), `ChatsContext` (chat list),
+  `StorageContext` (local-storage usage banner).
+- **Server-Sent Events** for streaming text completions, consumed with a `fetch`
+  `ReadableStream` reader (`src/chat/stream.js`) — not EventSource, so POST + cookies work.
+- A thin `fetch` wrapper (`src/api.js`) hitting same-origin `/api`; cookies included
+  (and `FormData` passed through as-is for multipart uploads). Dev proxies
+  `/api` → backend and (behind nginx) serves the SPA.
+
+### Backend (`server/`)
+- **Node.js (ESM, `"type":"module"`) + Express.**
+- **Sessions:** `express-session` + `connect-pg-simple` (Postgres-backed `sessions`
+  table). httpOnly/secure/sameSite=lax cookies — **no JWT, no localStorage tokens**.
+- **Security:** `helmet`, `cookie-parser` (signed cookies), `express-rate-limit` on
+  login/register/TOTP, an Origin-based CSRF check on state-changing requests.
+- **Uploads:** `multer` (memory storage) for image input — used in all three
+  modalities (vision text, image-to-image reference, image-to-video first frame).
+- Layered by feature: `auth/`, `chats/` (text `completion`, `imagegen`, `videogen`),
+  `keys/` (BYOK key), `openrouter/` (API client + catalogue routes), `media/`
+  (serve files), `storage/` (local accounting + cloud), `account/` (settings menu),
+  `crypto/` (encryption + token hashing).
+
+### Auth
+- **argon2id** password hashing (`@node-rs/argon2`, prebuilt binaries).
+- **TOTP 2FA** (`otplib`) with QR enrollment (`qrcode`) and one-time backup codes
+  (hashed at rest). TOTP secret encrypted at rest.
+- **Trusted-device** signed httpOnly cookie (token hashed server-side, 30-day
+  default) lets a known browser skip TOTP; revocable individually or in bulk
+  (password change / admin reset).
+- **Invite-only registration** — admins mint single-use, hashed, expiring invite
+  tokens (CLI or route); no email service exists anywhere in the app.
+- **Manual recovery** via CLI (`scripts/reset-user.js`) / raw SQL — no reset emails.
+
+### Crypto
+- **AES-256-GCM** (Node `crypto`) with a server-side master key (`ENCRYPTION_KEY`)
+  encrypts the OpenRouter key and Google Drive refresh tokens at rest
+  (`crypto/encryption.js`). SHA-256 for hashing invite/trusted-device/backup tokens
+  (`crypto/tokens.js`). Secrets are never logged or returned (key shows last-4 only).
+
+### External APIs
+- **OpenRouter (BYOK — the user's own key as bearer, no server key):**
+  - Text: `GET /models`, `POST /chat/completions` (SSE streaming, `include_usage`).
+    Image input via `image_url` content parts (vision).
+  - Image: dedicated `GET /images/models` (+ per-model `/endpoints` pricing),
+    `POST /images` (Unified Image API). Image-to-image via `input_references`.
+  - Video: dedicated `GET /videos/models`, `POST /videos` — **asynchronous**:
+    `202 {id, polling_url}` then polled via `GET /videos/{id}` (no webhook used).
+    Image-to-video via `frame_images` (`frame_type:'first_frame'`).
+  - Credits: `GET /auth/key` for the pre-flight balance check + settings display.
+  - Errors are classified into user-actionable buckets (key / credits / model).
+  - Per-model **image-input capability** is looked up per modality against the
+    matching catalogue (`/api/models/capabilities?id=&modality=`): `input_modalities`
+    on `/models` and `/images/models`; `supported_frame_images` on `/videos/models`.
+- **Google Drive** (the one supported cloud provider) — raw REST over `fetch` (no
+  SDK), OAuth2 authorization-code with `drive.file` scope into an app-created
+  `mmchat` folder. Mockable base URLs for tests.
+
+### Data storage
+- **PostgreSQL 16.** Raw-SQL migrations in `server/db/migrations/*.sql`, applied by a
+  small custom runner (`server/db/migrate.js`) tracked in a `schema_migrations` table.
+  `gen_random_uuid()` (core, no superuser).
+- **Tables:** `users`, `totp_secrets`, `trusted_devices`, `invite_tokens`,
+  `api_keys`, `chats`, `messages`, `media_files`, `storage_accounts`, `sessions`.
+- **Local media** on disk under `storageDir/<userId>/`; a denormalized
+  `users.storage_used_bytes` counter enforces a 5 GB cap (3.5 GB notice), with a
+  recompute CLI as the self-healing ground-truth reconciler. Cloud media stores only
+  an external reference and doesn't count against the cap. Uploaded image **input**
+  (vision / reference / first-frame) is persisted locally and counted, same as output.
+
+### Core architectural patterns
+- **BYOK + strict per-user isolation** — every query scoped to `req.session.userId`.
+- **Server-side sessions**, SSE (not WebSocket) for one-directional streaming.
+- **Spend protection:** frontend disables submit in-flight; backend idempotency
+  keys; a **partial unique index** (`messages` pending-per-chat) blocks duplicate
+  generations; a **Postgres advisory lock** guards the concurrent-video cap;
+  pre-flight credit check + confirmation dialog before video.
+- **cost_usd** stored per assistant/output message at generation time (prefers
+  OpenRouter's reported `usage.cost`); the spend dashboard aggregates it.
+- **Denormalized, self-healing counters** with recompute/verify utilities (local
+  disk sweep; cloud out-of-band **soft-flagging** via `media_files.unavailable_at`).
+- **Config via env** (`server/.env`, `client/.env`; `.env.example` committed) so
+  secrets and the deployment domain stay out of the repo.
+
+> **Build status:** built in gated stages per `build_guide.md` — Steps 0–8 and 11
+> complete; Steps 9–10 (multi-provider priority/quotas + WebDAV) intentionally
+> deferred to the bible's "Future updates". **Post-Step-11 enhancement:** image
+> input across all three modalities (image-to-image + image-to-video), documented
+> in the bible's "Implementation Notes → Image input across modalities".
+
+## 3. Inline File Bundle
+
+Complete source for all 67 essential files, each labeled with its repo-relative path. Code fences are auto-sized so files containing their own ```` ``` ```` blocks (the markdown docs) render intact.
+
+### File: `.gitignore`
+
+```gitignore
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+out/
+.vite/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime / process managers
+pids/
+*.pid
+*.seed
+*.pid.lock
+.pm2/
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# User-uploaded & generated media (local storage cap).
+# Anchored so these only ignore runtime storage dirs — NOT source dirs like
+# server/src/media or server/src/storage.
+/uploads/
+/media/
+/storage/
+/server/uploads/
+/server/media/
+/server/storage/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Caches
+.cache/
+.eslintcache
+.npm/
+```
+
+### File: `AGENTS.md`
+
+````markdown
+# AGENTS.md
+
+System context for AI edits to **mmchat** — a BYOK multi-model AI chat client
+(text/image/video via OpenRouter). Source of truth for scope/schema/security is
+`chat_project_bible.md`; staged build plan is `build_guide.md`.
+
+## 1. Tech Stack & Environment
+
+- **Runtime:** Node.js ≥20, **ESM only** (`"type":"module"` in both workspaces).
+- **Monorepo:** npm workspaces — `client/` + `server/`. `concurrently` for dev.
+- **Frontend:** React 18, Vite 6, `react-router-dom`, hand-written CSS (`src/styles.css`), React Context for state. No UI framework.
+- **Backend:** Express; `express-session` + `connect-pg-simple` (Postgres sessions); `helmet`, `cookie-parser`, `express-rate-limit`, `multer`.
+- **DB:** PostgreSQL 16. Raw-SQL migrations via a custom runner (`server/db/migrate.js`), tracked in `schema_migrations`. `gen_random_uuid()` (core).
+- **Auth/crypto:** `@node-rs/argon2` (passwords), `otplib` + `qrcode` (TOTP), Node `crypto` AES-256-GCM (secrets at rest), SHA-256 (token hashing).
+- **External APIs:** OpenRouter (BYOK — user's own key, no server key); Google Drive REST over `fetch` (no SDK).
+
+## 2. Terminal Commands
+
+```sh
+# Install (root — installs both workspaces)
+npm install
+
+# Dev servers: API :8000 + Vite :5173 (both, via concurrently)
+npm run dev                 # plain local
+npm run dev:proxy           # behind nginx (sets VITE_BEHIND_PROXY=1)
+
+# DB migrations
+npm run migrate             # apply pending
+npm run migrate:status      # show applied/pending
+
+# Client production build
+npm run build:client
+
+# One-off CLIs (from server/)
+node scripts/create-invite.js --admin        # mint first/admin invite token
+node scripts/reset-user.js --email X ...      # manual pw/TOTP/admin recovery
+node scripts/recompute-storage.js --dry-run   # reconcile storage counters
+```
+
+**Tests:** there is **no automated test suite** (manual-test driven per
+`build_guide.md`). Verify changes with: `node --check <file>` (server syntax),
+`npm run build:client` (client compiles), and manual testing. Historically,
+ad-hoc checks used a throwaway Dockerized Postgres 16 + a mock OpenRouter.
+
+## 3. Invariants & Coding Rules
+
+- **ESM only** — `import`/`export`, no `require()` in `src`.
+- **Per-user isolation is absolute.** Every query scopes to `req.session.userId`
+  (owner-check via joins). Never trust a client-supplied user/owner id.
+- **BYOK:** no server-wide OpenRouter key. Decrypt the user's key at request time
+  only, never log it, return only the last-4 suffix to the client.
+- **Secrets/PII never in the repo.** No domain/host/IP/real keys in committed
+  files. Config via env: `.env` gitignored, `.env.example` committed with
+  placeholders. Client-exposed vars **must** be `VITE_`-prefixed (e.g.
+  `VITE_CONTACT_EMAIL`). Grep committed files before committing.
+- **Encrypt-at-rest** anything sensitive (OpenRouter key, Drive refresh token) via
+  `crypto/encryption.js` (AES-256-GCM); hash tokens via `crypto/tokens.js`.
+- **Sessions** are server-side (Postgres), httpOnly cookies — **no JWT, no
+  localStorage tokens**. The `sessions` table has no FK to `users`; when purging a
+  user, delete rows matched by `sess ->> 'userId'`.
+- **`cost_usd`** is set on assistant/output rows only; prefer OpenRouter's returned
+  `usage.cost`, fall back to a computed estimate only when cleanly per-unit.
+- **Message ordering:** insert the user + assistant turn in one txn using
+  `clock_timestamp()` for `created_at` (never the shared `now()` — ties transpose),
+  and list with `ORDER BY created_at ASC, (role <> 'user') ASC`.
+- **Storage counter** (`users.storage_used_bytes`) is denormalized; maintain it
+  symmetrically — increment on local write, decrement on delete with
+  `GREATEST(0, …)`. Only `storage_location='local'` counts; **cloud writes skip the
+  counter/cap**. Unlink disk files **after** commit.
+- **Spend protection — do not remove:** the pending-per-chat partial unique index
+  (migration `003`), the per-user advisory lock on video submit, or idempotency-key
+  handling. One pending generation per chat.
+- **Migrations are additive + immutable.** Never edit an applied migration; add the
+  next `NNN_name.sql`. Sequential numbering.
+- **Error handling:** classify OpenRouter/HTTP errors via `classifyError` →
+  `category` of `key|credits|model|request`; surface the real provider message and
+  distinguish "fix your key/credits" from "try another model". Return
+  `{ error, category }` JSON (pre-flight) or an SSE `{type:'error'}` mid-stream.
+- **Streaming is SSE, not WebSocket.** Video is **async + polled** (submit →
+  `202 {id, polling_url}` → poll `GET /videos/{id}`) with on-load reconciliation;
+  **no webhook** (`callback_url` unused).
+- **Image input works in all three modalities**, gated per-model via
+  `GET /api/models/capabilities?id=&modality=` (routes to the right catalogue —
+  the chat `/models` list never holds image/video-gen models). Uploaded images
+  are persisted as `input` media (local, counted) **and** sent to OpenRouter as
+  base64 data URIs: text → `image_url` content part; image-gen → `input_references`;
+  video-gen → `frame_images` with `frame_type:'first_frame'` (one frame, capped
+  client-side). Capability sources differ: `input_modalities` on `/models` (text)
+  and `/images/models` (image); **`supported_frame_images`** on `/videos/models`
+  (video — that catalogue has no `architecture`). Only **images** upload, never
+  video files. Reverse-proxy body limit must exceed the 20 MB multer cap (nginx's
+  1 MB default silently `413`s uploads).
+- **Cloud out-of-band deletes:** soft-flag `media_files.unavailable_at`; **never
+  hard-delete a media row** (message history + `cost_usd` must survive).
+- **Deleting a chat/account leaves the user's Google Drive files intact** (by
+  design); only local disk files are unlinked.
+- **No email service exists** anywhere (recovery is manual/CLI). Don't add one.
+- **Don't edit `chat_project_bible.md` / `build_guide.md` or `git commit` unless
+  explicitly asked.**
+
+## 4. Directory Map
+
+| Path | Responsibility |
+|---|---|
+| `server/src/index.js` | Express app: middleware, session store, route mounting |
+| `server/src/config.js` | Env parsing/validation (single source of config) |
+| `server/src/auth/` | Invite signup, login, TOTP, trusted-device cookies, sessions |
+| `server/src/crypto/` | AES-256-GCM encryption + SHA-256 token hashing |
+| `server/src/keys/` | BYOK OpenRouter key: encrypted storage, credits |
+| `server/src/openrouter/` | OpenRouter API client (models/chat/images/videos/auth) + catalogue routes |
+| `server/src/chats/` | Chat CRUD + generation: `completion` (text SSE), `imagegen`, `videogen` |
+| `server/src/media/` | Serve stored media (local + cloud passthrough) |
+| `server/src/storage/` | Local accounting, disk I/O, cloud accounts, `providers/googleDrive` |
+| `server/src/account/` | Settings menu: profile edit, spend dashboard, account deletion |
+| `server/db/migrations/` | Sequential raw-SQL schema migrations |
+| `server/scripts/` | Operational CLIs (invite, reset-user, recompute-storage) |
+| `client/src/pages/` | Route views (Login, Register, Chat, Settings) |
+| `client/src/chat/` | Chat shell, sidebar, model picker, contexts, SSE reader |
+| `client/src/auth/` | `AuthContext` + TOTP enrollment UI |
+| `client/src/api.js` | `fetch` wrapper for same-origin `/api` (cookies included) |
+````
+
+### File: `README.md`
+
+```markdown
+Multi-Model AI Chat Client
+
+A self-hosted, bring-your-own-key (BYOK) web app for chatting with and comparing outputs across large language models, image generation models, and video generation models — all routed through OpenRouter.
+
+Why this exists
+
+Comparing how different models handle the same prompt usually means juggling separate accounts, API keys, and interfaces for every provider. This app puts that behind one interface: pick a model from OpenRouter's catalog, chat with it, and open another tab with a different model to compare side by side. No automated multi-model broadcasting — comparison is just a normal part of using multiple tabs.
+
+This is a personal project, not a public product. It's invite-only and not intended for open signup, though the architecture doesn't require a rework if that changes later.
+
+Features
+Text, image, and video chat, each backed by OpenRouter's respective API
+Live model picker with search, modality filtering, and pricing shown inline
+Provider routing controls (price/speed sort, data-privacy preference) for models served by multiple underlying providers
+Spend dashboard: total cost, plus breakdown by model and by chat
+Image input across all three modalities: attach images to vision text models, as reference images for image-to-image editing, or as a first frame for image-to-video
+BYOK — your own OpenRouter API key, encrypted at rest, never exposed after initial save
+Local storage with optional linked cloud folders (Google Drive, Dropbox, OneDrive), with user-set priority order and per-provider quotas, so you're not capped by local disk alone
+Password + TOTP two-factor auth, with a "trusted device" option so TOTP isn't required on every login
+Tech stack
+Frontend: React + Vite
+Backend: Node.js + Express
+Database: PostgreSQL
+Project docs
+chat_project_bible.md — full spec: schema, auth design, storage rules, OpenRouter integration details, and everything else that defines how this app is supposed to work.
+build_guide.md — staged build-and-test plan, written as a sequence of prompts for building this incrementally with Claude Code, with a manual verification checklist after each stage.
+
+Status
+
+Actively being built, following the staged plan in build_guide.md. Not yet feature-complete.
+
+License
+
+TBD
+```
+
+### File: `build_guide.md`
+
+```markdown
+# Build & Testing Guide — Multi-Model AI Chat Client
+
+How to use this document: work through the steps in order. Each step has a
+prompt to give Claude Code and a manual test checklist. **Do not move to the
+next step until you've personally tested the current one and confirmed it
+works.** Every prompt below includes an explicit instruction telling Claude
+Code to stop and wait for your confirmation — this is intentional and should
+not be removed, even if it seems slower. Building auth wrong and finding out
+five steps later, after everything else was built on top of it, costs far more
+time than testing after each step.
+
+Before Step 0, make sure `chat_project_bible.md` is in the project directory —
+every prompt tells Claude Code to read it first, since it's the source of
+truth for schema, security requirements, and scope decisions.
+
+---
+
+## Step 0 — Project Scaffolding
+
+**Goal**: repo structure, dev environment, and an empty-but-running app —
+nothing functional yet, just proof the stack boots.
+
+**Prompt:**
+> Read `chat_project_bible.md` in this directory — it's the full spec for
+> what we're building. Don't build any features yet. Set up the project
+> scaffolding only:
+> - React + Vite frontend, Node.js + Express backend, as two directories in
+>   this repo (or a monorepo structure if you prefer — your call).
+> - PostgreSQL connection config using environment variables (`.env`, with a
+>   `.env.example` committed instead of the real one).
+> - Create the full database schema from the bible's "Database Schema"
+>   section as a migration (use whatever migration tool you think fits —
+>   `node-pg-migrate`, raw SQL files, or similar).
+> - A basic Express server that starts and responds to a health-check route,
+>   and a basic Vite dev server that renders a placeholder page.
+> - `.gitignore` covering `node_modules`, `.env`, and build output.
+>
+> When this is done, stop and tell me how to start both the frontend and
+> backend locally, and how to run the migration. Wait for me to confirm
+> everything runs before doing anything else.
+
+**You test:**
+- [ ] Backend starts without errors, health-check route responds
+- [ ] Frontend dev server starts, placeholder page loads in browser
+- [ ] Migration runs cleanly against a local/dev Postgres instance
+- [ ] All tables from the schema exist (`\dt` in `psql`)
+
+**Do not proceed to Step 1 until all four are confirmed.**
+
+---
+
+## Step 1 — Auth
+
+**Goal**: invite-based account creation, password + TOTP login, trusted-device
+cookie, admin invite generation. No chat functionality yet.
+
+**Prompt:**
+> Read `chat_project_bible.md`, specifically the "Auth" section and the
+> `users`, `totp_secrets`, `trusted_devices`, and `invite_tokens` tables in
+> the schema. Build:
+> - Admin-issued invite token generation (a way for an `is_admin` user to
+>   create a one-time invite token — a CLI script or a minimal admin route is
+>   fine, doesn't need a polished UI yet).
+> - Account creation via invite token: set email + password (argon2 hash),
+>   enroll TOTP (QR code + secret), generate and display one-time backup
+>   codes (hashed at rest, shown once).
+> - Login: email + password, then TOTP challenge if no valid trusted-device
+>   cookie is present, skip TOTP if one is.
+> - Trusted-device cookie: signed, httpOnly, secure, set after successful
+>   TOTP verification, token hashed server-side, configurable expiry
+>   (default 30 days).
+> - Server-side sessions via httpOnly/secure/sameSite cookies (Postgres-backed
+>   session store).
+> - Manual recovery: document in the bible the exact SQL/CLI commands to
+>   reset a locked-out user's password and TOTP directly via DB access.
+>
+> No chat UI yet — a simple login/signup page and a "logged in, nothing here
+> yet" placeholder after auth succeeds is enough. When done, stop and tell me
+> how to generate my first (admin) invite token and test the full flow. Wait
+> for my confirmation before starting Step 2.
+
+**You test:**
+- [ ] Generate an invite token, use it to create an account
+- [ ] TOTP QR code scans correctly in an authenticator app, code verifies
+- [ ] Backup codes are shown once and work if you deliberately use one instead of TOTP
+- [ ] Log out, log back in — TOTP required (no trusted-device cookie yet)
+- [ ] After TOTP success, log out and back in again — TOTP skipped (trusted-device cookie present)
+- [ ] Clear cookies / use a different browser — TOTP required again
+- [ ] Try an expired or already-used invite token — rejected
+- [ ] Confirm the documented manual-recovery commands actually work against a test account
+
+**Do not proceed to Step 2 until all of the above are confirmed.**
+
+---
+
+## Step 2 — Core Chat Shell
+
+**Goal**: sidebar, chat CRUD, OpenRouter API key storage — the frame the rest
+of the app fills in. No actual model calls yet.
+
+**Prompt:**
+> Read `chat_project_bible.md`, specifically "Core Chat UI" (sidebar/layout
+> only, ignore model picker details for now), the OpenRouter key storage
+> requirements under "OpenRouter Integration," and the `chats`, `messages`,
+> and `api_keys` tables. Build:
+> - Sidebar: flat list of the logged-in user's chats, "new chat" button,
+>   collapse/expand toggle.
+> - Chat CRUD: create, rename, delete a chat. A chat has a title, model_id,
+>   and modality, but don't wire up real model calls yet — a chat can exist
+>   with no messages.
+> - Settings page (or a simple placeholder route) where the user pastes their
+>   OpenRouter API key. Encrypt at rest with AES-256-GCM using a server-side
+>   master key from an env var. Never return the full key to the client after
+>   save — only show the last 4 characters.
+>
+> When done, stop and tell me how to test key storage and chat CRUD. Wait for
+> my confirmation before starting Step 3.
+
+**You test:**
+- [ ] Create several chats, confirm they appear in the sidebar
+- [ ] Rename and delete a chat
+- [ ] Sidebar collapse/expand works
+- [ ] Save an OpenRouter API key, refresh the page — only last 4 characters shown, never the full key
+- [ ] Check the database directly — confirm the stored key is encrypted, not plaintext
+- [ ] Update the key to a different value, confirm it actually changes
+
+**Do not proceed to Step 3 until all of the above are confirmed.**
+
+---
+
+## Step 3 — Model Picker + Text Modality
+
+**Goal**: real, working text chat against OpenRouter. This is the core of the
+app — take your time testing this one.
+
+**Prompt:**
+> Read `chat_project_bible.md`, specifically "Core Chat UI" (model picker,
+> provider routing) and the "OpenRouter Integration" section for the text row
+> and the streaming/error-handling notes. Build:
+> - Model picker: live list from `GET /api/v1/models`, filtered by
+>   `output_modalities=text` by default. Show each model's name, description
+>   (strip markdown links, render as plain text), and pricing. Add a text
+>   search filter and a modality filter.
+> - Provider routing controls: a sort toggle (price vs. speed) and a privacy
+>   toggle (avoid data-logging providers), mapped to the `provider` object's
+>   `sort` and `data_collection` fields on the request.
+> - Send a message: `POST /api/v1/chat/completions`, streamed via
+>   Server-Sent Events, rendered incrementally in the chat pane as it arrives.
+> - Store both the user message and the assistant response in the `messages`
+>   table.
+> - Error handling: surface OpenRouter's actual error message for invalid/
+>   revoked key, insufficient credits, or model-unavailable responses —
+>   distinguish "fix your key/credits" errors from "try a different model"
+>   errors in how they're displayed.
+>
+> When done, stop and tell me how to test this end-to-end with a real
+> OpenRouter key. Wait for my confirmation before starting Step 4.
+
+**As built (deviations):** the model picker is **locked to the chat's modality**
+(the in-picker modality selector was removed — a mismatch only errors on send);
+the optional "specialty filter" was not built; all displayed prices are labeled
+**estimates** ("verify on openrouter.ai"). A chat's **model locks once it has
+messages** (UI + server). See the bible's "Implementation Notes & Deviations".
+
+**You test:**
+- [ ] Model picker loads real models, search and modality filter work
+- [ ] Pricing displayed matches what's on openrouter.ai for a couple of models you spot-check
+- [ ] Send a message to a real model, response streams in visibly (not all-at-once)
+- [ ] Message history persists after a page refresh
+- [ ] Toggle the sort/privacy provider routing options and confirm (via network tab) the `provider` object is actually being sent
+- [ ] Deliberately use an invalid API key — confirm the error message is clear and correctly identified as a "key" problem
+- [ ] Deliberately pick an unusual/rare model that might be unavailable — confirm the error is identified as a "model" problem, not a generic failure
+- [ ] Open two tabs, two different chats, two different models — confirm both work independently (this is your core comparison workflow — make sure it's actually good to use)
+
+**Do not proceed to Step 4 until all of the above are confirmed.**
+
+---
+
+## Step 4 — User-Uploaded Input
+
+**Goal**: attach an image/file to a message for vision-capable models.
+
+**Prompt:**
+> Read `chat_project_bible.md` — the "User-uploaded input" note under "Core
+> Chat UI" and the `media_files` table (`direction = 'input'`). Build:
+> - File/image attach control on the message composer, for models that
+>   support vision input.
+> - Uploaded files get written to local storage (same mechanism you'll expand
+>   in Step 7 for generated output) and referenced via `media_files` with
+>   `direction = 'input'`.
+> - Attached images get sent to OpenRouter as part of the message content per
+>   the model's expected multimodal input format.
+>
+> When done, stop and tell me how to test this. Wait for my confirmation
+> before starting Step 5.
+
+**You test:**
+- [ ] Attach an image to a message, send it to a vision-capable model, confirm the model actually "sees" it (ask it to describe the image)
+- [ ] Confirm the uploaded file is written to disk and referenced in `media_files` with the correct direction
+- [ ] Try attaching to a non-vision model — confirm this fails gracefully, not silently
+
+**Do not proceed to Step 5 until all of the above are confirmed.**
+
+---
+
+## Step 5 — Image Modality
+
+**Goal**: image generation via OpenRouter's Unified Image API.
+
+**Prompt:**
+> Read `chat_project_bible.md` — the image row in "OpenRouter Integration"
+> and the output-persistence assumption (fetch and store immediately, don't
+> assume OpenRouter's URL is durable). Build:
+> - Image modality chat: `POST /api/v1/images`, model picker filtered to
+>   `output_modalities=image`.
+> - On generation completion, immediately fetch the image bytes and write to
+>   local storage, referenced via `media_files` with `direction = 'output'`.
+> - Display the generated image inline in the chat thread.
+> - Apply the idempotency guard from the "Spend Protection" section: disable
+>   submit while a generation is in flight, refuse a duplicate request against
+>   the same pending message.
+>
+> When done, stop and tell me how to test this. Wait for my confirmation
+> before starting Step 6.
+
+**As built (deviations):** image models come from a dedicated
+`GET /api/v1/images/models` endpoint (~48 models), **not** `output_modalities=image`
+on `/models`. Pricing is **not** in that list — it's fetched per-model from
+`GET /api/v1/images/models/{id}/endpoints`, with units that vary (per image /
+per megapixel / per token). See the bible's "Implementation Notes & Deviations".
+
+**You test:**
+- [ ] Generate an image from a real prompt, confirm it renders in the chat
+- [ ] Confirm the file actually exists on disk, not just a link to OpenRouter's URL
+- [ ] Double-click submit rapidly — confirm only one generation fires, not two
+- [ ] Refresh the page mid-generation (if timing allows) — confirm it doesn't silently duplicate the request
+- [ ] Try an image model with a deliberately bad prompt or invalid key — confirm error handling matches Step 3's pattern
+
+**Do not proceed to Step 6 until all of the above are confirmed.**
+
+---
+
+## Step 6 — Video Modality
+
+**Goal**: async video generation — highest complexity, most expensive, most
+in need of careful testing given real spend is involved.
+
+**Prompt:**
+> Read `chat_project_bible.md` — the video row in "OpenRouter Integration,"
+> the pending-video-job reconciliation note, and the full "Spend Protection"
+> section. Confirm current OpenRouter docs for the exact completion delivery
+> mechanism (webhook vs. polling) before implementing — this was an open item
+> in planning, not confirmed. Build:
+> - Video modality chat: `POST /api/v1/videos`, model picker filtered
+>   appropriately (confirm against current docs whether `output_modalities`
+>   supports a video value, or if video models need to be identified another
+>   way).
+> - Async job handling: message stored in a `pending` state with the job ID
+>   in `metadata`, updated to `complete` (with the fetched/stored file) once
+>   the job finishes.
+> - Reconciliation: on chat load, any message still in `pending` state gets
+>   its job status re-checked against OpenRouter, not just relying on
+>   whatever live completion mechanism you implemented.
+> - Spend protection specific to video: a cap on concurrent pending video
+>   jobs per user, a pre-flight credit balance check via `GET /api/v1/auth/key`
+>   with a warning if the generation would use a meaningful share of what's
+>   left, and a confirmation dialog before submitting.
+>
+> When done, stop and tell me exactly what you confirmed about the completion
+> mechanism, and how to test this. Wait for my confirmation before starting
+> Step 7 — this step involves real spend, so take your time testing it.
+
+**As built (deviations):** video is **async/polled** — `POST /api/v1/videos` →
+`202 {id, polling_url, status}`, polled via `GET /api/v1/videos/{id}`; the
+`callback_url` webhook is **not** used (polling + on-load reconciliation instead).
+Video models come from `GET /api/v1/videos/models` (**not** `output_modalities=video`);
+pricing is `pricing_skus` per **video-second** (some keys in cents). Concurrent-video
+cap = `MAX_CONCURRENT_VIDEOS` (default 2). See the bible's "Implementation Notes &
+Deviations".
+
+**You test:**
+- [ ] Generate a video, confirm the confirmation dialog appears first
+- [ ] Confirm the job shows a clear "pending/processing" state, not a blank/broken UI, while waiting
+- [ ] Close the tab mid-generation, reopen the chat later — confirm the job status reconciles correctly (either still pending or completed, not lost)
+- [ ] Confirm the finished video file is written to local storage, not just linked to OpenRouter
+- [ ] Try to submit a second video job while one is still pending — confirm the concurrent-job cap actually blocks or warns as designed
+- [ ] Check that the balance warning appears when credits are low (may need to test with a near-empty test key)
+- [ ] Confirm no duplicate jobs were created anywhere in this testing — check the OpenRouter dashboard/usage directly, not just your app's UI
+
+**Do not proceed to Step 7 until all of the above are confirmed — this is the
+step most likely to cost you real money if something's wrong, verify
+carefully.**
+
+---
+
+## Step 7 — Local Storage Accounting
+
+**Goal**: finish local storage accounting. The write-side counter and 5 GB hard
+cap already exist (built incrementally across Steps 4–6); this step adds the
+missing **decrement on delete**, the **3.5 GB notice**, and the **settings
+display** — and reconciles any counter drift the missing decrement caused.
+
+**Prompt:**
+> Read `chat_project_bible.md` — the "Storage" section (local cap portion only,
+> not cloud linking yet) and the "Implementation Notes & Deviations → Local
+> storage" note.
+>
+> **Already built (do NOT rebuild):** `users.storage_used_bytes` is incremented
+> and the 5 GB hard cap is pre-flight-enforced on all three local write paths —
+> image-input uploads, image generation, and video generation. `NOTICE_LOCAL_BYTES`
+> (3.5 GB) and `MAX_LOCAL_BYTES` (5 GB) already exist in config.
+>
+> Build the missing pieces:
+> - **Decrement the counter on delete.** Nothing currently decreases
+>   `storage_used_bytes`, so deleting a chat (which cascades `media_files` via FK)
+>   leaves the counter overstated. Make every path that removes local
+>   `media_files` rows also subtract their `size_bytes` from the owner's counter —
+>   chat delete, plus any message/media delete — for `storage_location = 'local'`
+>   only. FK cascade won't run app code, so handle this explicitly (sum the
+>   affected rows and decrement in the same transaction, or a DB trigger — your
+>   call), and delete the underlying files from disk too.
+> - **Reconcile existing drift.** Provide a one-off recompute (CLI script or
+>   admin route) that resets each user's `storage_used_bytes` to the true sum of
+>   their local `media_files.size_bytes` — earlier testing likely already skewed
+>   counters given the missing decrement.
+> - **3.5 GB notice — persistent, on every path.** Today a transient
+>   `storageNotice` flag is emitted only on the text-upload SSE path. Replace it
+>   with a consistent in-app notification shown whenever a user is at or above
+>   3.5 GB, regardless of how they got there (upload / image / video), and
+>   visible **on load** — not just in the response to the write that crossed it.
+> - **Settings storage-used display**: used vs. 5 GB cap (bar + "X.X GB of 5 GB"),
+>   reading the counter.
+> - Leave the existing 5 GB hard stop as-is (blocked writes with a clear message,
+>   text/existing chats still usable) — just confirm it still holds after the above.
+>
+> When done, stop and tell me how to test threshold behavior without actually
+> generating 5 GB of real media. Wait for my confirmation before starting Step 8.
+
+**As built (deviations):** decrement + disk-unlink on delete is app-code in
+`deleteChatAndReleaseMedia` (captures local refs before the FK cascade, unlinks
+after commit); **chat delete is the only removal path** (no per-message/media
+delete endpoints). A new **`GET /api/storage`** endpoint backs a persistent
+shell banner (`StorageContext`, fetched on load + window focus), replacing the
+unused transient SSE flag. The Generate button isn't disabled at the cap — the
+click is refused pre-flight with a clear message. Recompute is a CLI
+(`scripts/recompute-storage.js`; `--dry-run`/`--email`/`--sweep-orphans`). **No
+schema migration.** `--sweep-orphans` removes untracked, >5-min-old files left on
+disk by a crash mid-write or pre-Step-7 deletes (the age guard spares in-flight
+writes); the normal delete path creates no new orphans. See the bible's
+"Implementation Notes & Deviations → Local storage accounting (Step 7)".
+
+**You test:**
+- [ ] Storage-used display in settings matches reality (sum of actual file sizes on disk for that user)
+- [ ] Artificially push a test account's counter near 3.5GB — confirm the notice appears, and still appears after a page reload (not just once, right after a write)
+- [ ] Push past 5GB — confirm new generations/uploads are blocked with a clear message, and existing chats/text still work normally
+- [ ] Delete some media **and** delete a whole chat that has media — confirm the counter decreases by the right amount, the files are gone from disk, and the block lifts appropriately
+- [ ] Run the reconcile/recompute against an account with a deliberately-skewed counter — confirm it resets to the true on-disk total
+- [ ] Run `--sweep-orphans --dry-run`, then `--sweep-orphans` — confirm it lists and removes untracked files left on disk while leaving tracked files intact
+
+**Do not proceed to Step 8 until all of the above are confirmed.**
+
+---
+
+## Step 8 — Cloud Storage: Google Drive
+
+**Goal**: OAuth linking and folder assignment for Google Drive — the one
+supported cloud provider. (Dropbox, OneDrive, and the WebDAV fallback are
+**deferred to "Future updates"** in the bible — Google Drive is enough for now.)
+
+**Prompt:**
+> Read `chat_project_bible.md` — the "Cloud storage linking" section and the
+> `storage_accounts` table. Build the Google Drive integration:
+> - OAuth2 connect/disconnect flow from the settings page.
+> - Encrypted refresh token storage (same AES-256-GCM pattern as the
+>   OpenRouter key).
+> - Folder selection/assignment (native picker if the provider's SDK
+>   supports it, otherwise a reasonable manual entry).
+> - On generation (image/video), if this provider is connected and a folder
+>   is assigned, upload there instead of local disk, store only the external
+>   reference in `media_files`, and don't count it against the 5GB cap.
+> - Handle out-of-band deletion (bible: "Out-of-band deletion & manual
+>   verification"). A cloud file the user later deletes directly in the provider
+>   returns not-found when we serve it — flag that `media_files` row
+>   (`unavailable_at`), render "no longer in your cloud storage" instead of a
+>   broken image, and stop re-fetching it (lazy detection). Add a manual "Verify
+>   cloud files" button in settings that walks this provider's `media_files`
+>   rows, checks each is still reachable, and flags the vanished ones. Keep the
+>   rows (history + `cost_usd` must survive) — soft-flag, never hard-delete.
+>   (Recomputing a per-account byte counter is deferred with the rest of the
+>   multi-provider quota work — there's no `bytes_used` yet at this step.)
+>
+> When done, stop and tell me how to test the full connect → generate →
+> verify-in-Drive → disconnect flow. Wait for my confirmation before starting
+> the next step.
+
+**As built — Google Drive (deviations):** raw Drive REST over `fetch` (no SDK);
+scope **`drive.file`** with an **app-created `mmchat` folder** instead of the
+Google Picker (least privilege; the user can't target an arbitrary pre-existing
+folder). Requires a Google Cloud OAuth client — env `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET`, `PUBLIC_BASE_URL` (redirect URI
+`…/api/storage/google/callback`); if unset, Drive isn't offered. **Migration
+004** adds `media_files.unavailable_at` + `content_type` and a
+`storage_accounts (user_id, provider)` unique. **Only generation output** routes
+to cloud; uploaded vision **input stays local** this pass. Cloud writes skip the
+5 GB counter/cap. Disconnected-account cloud rows degrade to the same
+"unavailable" placeholder as out-of-band-deleted ones. `bytes_used` recompute is
+deferred with the multi-provider quota work. On reconnect the app reuses its
+existing `mmchat` folder rather than creating duplicates. See the bible's
+"Implementation Notes & Deviations → Cloud storage — Google Drive (Step 8)".
+
+**You test:**
+- [ ] Connect flow completes (Settings → Cloud storage → Connect Google Drive → consent → connected)
+- [ ] Generate an image or video with Drive connected — confirm the file actually lands in the `mmchat` folder in your Drive
+- [ ] Confirm this generation does NOT count against the local 5GB cap
+- [ ] Delete a file directly in Google Drive (out-of-band), then reload the chat — confirm it renders "no longer in your cloud storage", not a broken image or a crash
+- [ ] Run "Verify cloud files" — confirm the out-of-band-deleted file gets flagged and stops showing as present, while its message + cost record remain
+- [ ] Disconnect — confirm past references degrade gracefully (show the "unavailable" placeholder) and new generations fall back to local disk
+- [ ] Reconnect the same Google account — confirm previously-generated media displays again (re-adopted), no duplicate stored accounts, and the existing `mmchat` folder is reused
+
+**Do not proceed to the next step until all of the above are confirmed.**
+
+---
+
+## Step 9 — Cloud Storage Priority & Quotas — DEFERRED (Future updates)
+
+**Deferred** — only relevant with more than one cloud provider linked, and
+Google Drive is the sole provider for now. The full design (priority ordering,
+per-provider quotas, per-account `bytes_used`, fallthrough, quota notice banner)
+lives in the bible's "## Future updates". The original step prompt is retained
+below for whenever multi-provider support is picked up.
+
+### (deferred) Original prompt — Cloud Storage Priority & Quotas
+
+**Goal**: once more than one provider is connected, let the user control which
+one is used first and cap how much of each is consumed.
+
+**Prompt:**
+> Read `chat_project_bible.md` — the "Priority and per-provider quotas"
+> paragraph under "Storage," and the updated `storage_accounts` and
+> `media_files` schema (`priority`, `quota_bytes`, `bytes_used` on
+> `storage_accounts`; `storage_account_id` on `media_files`). Build:
+> - Settings UI: let the user set a priority order across their linked
+>   providers, and an optional quota (in GB) per provider.
+> - Upload logic: when generating media, try the highest-priority linked
+>   provider with room available; if it's at quota (or the upload fails),
+>   fall through to the next provider in priority order, and finally to local
+>   disk (still subject to the 5GB cap) if none are available.
+> - Track `bytes_used` per `storage_accounts` row, updated on upload/delete,
+>   same denormalized-counter pattern as `users.storage_used_bytes`.
+> - Extend the "Verify cloud files" action (introduced in Step 8) to also
+>   recompute each provider's `bytes_used` from the sum of its still-reachable
+>   `media_files` (excluding rows flagged `unavailable_at`), so quota
+>   enforcement and fallthrough stay honest after out-of-band deletions — the
+>   cloud analogue of Step 7's local recompute utility.
+> - Notice banner: surface an in-app notification when any linked provider
+>   hits its quota, same pattern as the existing 3.5GB local-storage notice.
+>
+> When done, stop and tell me how to test the priority/fallthrough behavior
+> without needing to actually fill a real quota. Wait for my confirmation
+> before starting Step 10.
+
+**You test:**
+- [ ] Connect at least two providers, set an explicit priority order, confirm new media goes to the top-priority one
+- [ ] Set a small quota on the top-priority provider (small enough to hit in testing), confirm uploads fall through to the next provider once it's reached
+- [ ] Confirm the notice banner appears when a provider's quota is hit
+- [ ] Confirm `bytes_used` on each `storage_accounts` row matches reality (sum of files actually sent there)
+- [ ] Delete some files directly in a provider (out-of-band), run "Verify cloud files" — confirm that provider's `bytes_used` drops to the true sum of what's still there, and quota/fallthrough reflects the corrected number
+- [ ] With all linked providers at quota, confirm it correctly falls back to local disk (and respects the 5GB cap there too)
+
+**Do not proceed to Step 10 until all of the above are confirmed.**
+
+---
+
+## Step 10 — WebDAV Fallback — DEFERRED (Future updates)
+
+**Deferred** with the rest of the multi-provider work (see the bible's
+"## Future updates"). Retained below for whenever it's picked up.
+
+### (deferred) Original prompt — WebDAV Fallback
+**Prompt:**
+> Read `chat_project_bible.md` — the "Tier 2 — generic WebDAV fallback"
+> section. Build a generic WebDAV adapter (endpoint URL + username/password
+> or app token, manually entered, no native folder picker) using the same
+> `storage_accounts` table pattern as Steps 8–9, with `provider = 'webdav'`,
+> including it in the same priority/quota logic from Step 9.
+>
+> When done, stop and tell me how to test it. Wait for my confirmation before
+> starting Step 11.
+
+**You test:**
+- [ ] Connect a real WebDAV endpoint (Nextcloud, Icedrive, or similar), confirm credentials are stored encrypted
+- [ ] Generate media with WebDAV connected, confirm it lands in the right place
+- [ ] Confirm it doesn't count against the local 5GB cap
+- [ ] Confirm it participates correctly in priority ordering alongside the other connected providers
+
+**Do not proceed to Step 11 until confirmed (or skip this step entirely if
+you've decided you don't need it yet).**
+
+---
+
+## Step 11 — Settings / Account Menu Completion
+
+*(With Steps 9–10 deferred, this is the **next active step after Step 8**.)*
+
+**Goal**: everything in the settings menu that isn't already built —
+profile editing, credits display, account deletion.
+
+**Prompt:**
+> Read `chat_project_bible.md` — the "Settings / Account Menu" section, the
+> "Spend Tracking" section, and the account-deletion note (local + DB records
+> only, cloud files left alone). Build:
+> - Edit profile (whatever fields exist beyond email/password at this point).
+> - Credits display: `GET /api/v1/auth/key` using the user's stored key,
+>   shown in settings.
+> - Spend dashboard: compute and store `cost_usd` on each assistant/output
+>   message at generation time (model pricing x actual usage from the
+>   OpenRouter response). Show total spend (all-time and this month),
+>   breakdown by model, and breakdown by chat.
+> - Delete account: removes the user's chats, messages, local media files
+>   (disk + DB), API key, storage account links, sessions, and trusted
+>   devices. Leaves any files already pushed to the user's own cloud folders
+>   untouched. Require an explicit confirmation step before this executes —
+>   it's irreversible.
+>
+> When done, stop and tell me how to test all of this, especially account
+> deletion. Wait for my confirmation — this is the last step.
+
+**As built (deviations):** everything lives under a new `server/src/account/`
+module at `/api/account`. **`cost_usd` was already computed + stored** at
+generation time in Steps 3/5/6 (preferring OpenRouter's `usage.cost`), so this
+step added **no** write-path — the spend dashboard is a read-only aggregation.
+"Profile" is email + password only (no other columns exist); it's edited via an
+**Edit button → modal** (change email / change password), current password
+required for either, password change adds a confirm field and revokes trusted
+devices. Credits reuse the existing `GET /api/keys/credits`. The spend dashboard
+**only counts chats the user still has** (deleting a chat cascades its costs),
+which the UI states. Account deletion requires typed `DELETE` **and** the current
+password. A **"Contact me"** button was added (not in the original spec), its
+address sourced from a gitignored `VITE_CONTACT_EMAIL` env var so the deployment
+domain stays out of the repo. **No schema migration.** See the bible's
+"Implementation Notes & Deviations → Settings / account menu (Step 11)".
+
+**You test:**
+- [ ] Profile edits save and persist
+- [ ] Credits display matches what's shown on openrouter.ai for that key
+- [ ] Send a few messages/generations across different models and chats, confirm the spend dashboard's total roughly matches the drop in your actual OpenRouter balance
+- [ ] Confirm the by-model and by-chat breakdowns add up to the same total
+- [ ] Create a disposable test account, generate some local media, connect a cloud provider and generate media there too
+- [ ] Delete the test account — confirm local media is gone from disk, DB rows are gone, but the cloud-folder files are still sitting untouched in the cloud provider
+- [ ] Confirm the deleted account genuinely can't log in anymore afterward
+
+**Once confirmed, the build is complete against the current bible.** Anything
+you want to add from here is a new feature, not a gap in this plan — update
+`chat_project_bible.md` first, then write a new step for it following this
+same pattern.
+
+---
+
+## Enhancement — Image input across modalities (post-Step-11)
+
+**Goal**: let image-generation chats accept a reference image (image-to-image /
+editing) and video-generation chats accept a first-frame image (image-to-video),
+matching the vision-input attach flow that text chats already had.
+
+> **Built as:** attach control surfaced for image + video chats (video capped at
+> one first-frame image); per-model capability gating extended to the image and
+> video catalogues (`GET /api/models/capabilities?id=&modality=`); uploads sent to
+> OpenRouter as base64 data URIs — image → `input_references`, video →
+> `frame_images` (`frame_type:'first_frame'`); uploaded frames persisted as
+> `input` media (local, counted), same as text vision. Details in
+> "Implementation Notes & Deviations → Image input across modalities".
+
+**Gotcha found during test:** the reverse proxy's body-size limit must exceed the
+20 MB multer per-file cap. nginx's 1 MB default silently `413`s a real image
+*before* it reaches Express, which the client can misreport as a model error —
+raise `client_max_body_size` on the proxy site (recorded in the deploy host's
+server reference).
+
+**You test:**
+- [ ] Image chat: attach a reference image to an image-to-image-capable model (e.g. `recraft/recraft-v3`), generate, confirm the output reflects the reference
+- [ ] Video chat: attach a first-frame image to an image-to-video model (e.g. `alibaba/wan-2.7`), generate, confirm the clip starts from that frame
+- [ ] Confirm the attach button is hidden/disabled for models that don't accept image input (e.g. `openai/sora-2-pro` for video — `supported_frame_images: null`)
+- [ ] Attach a >1 MB image and confirm it uploads successfully (proxy body limit is high enough) and that the uploaded input counts against local storage
+- [ ] Try a non-image file — confirm it's rejected with a clear message, not silently
+```
+
+### File: `chat_project_bible.md`
+
+````markdown
+# Multi-Model AI Chat Client — Project Spec
+
+## Purpose
+
+A BYOK (bring-your-own-key) web-based AI chat client for comparing outputs across
+LLMs, image generation models, and video generation models via OpenRouter. Core
+use case: personal curiosity / model comparison, not a public product. Multi-user
+from day one (friends, invite-only) but not publicized, with room to open up later
+without a schema rework.
+
+Comparison is manual: user opens a chat, picks a model, sends a prompt; to compare,
+they open another chat (or browser tab) with a different model and paste the same
+prompt. No automated fan-out/broadcast — each chat is a normal, independent
+conversation with one model.
+
+## Stack
+
+- **Frontend**: React + Vite
+- **Backend**: Node.js + Express
+- **Database**: PostgreSQL
+- **Deployment**: Existing VPS (Ubuntu 24.04), built via Claude Code CLI
+
+## Auth
+
+- Email (used as username, not for sending mail — no email service anywhere in
+  this app) + password (argon2 hashing)
+- TOTP as 2nd factor (`otplib`), enrollment via QR code, one-time backup codes
+  generated at setup (shown once, hashed at rest) — lets a user recover their own
+  2FA lockout without needing you
+- **TOTP is not required on every login.** After a successful TOTP verification,
+  set a separate long-lived signed httpOnly cookie ("trusted device") marking
+  that specific browser as verified for a set period (e.g. 30 days, configurable).
+  On subsequent logins, password alone is sufficient if a valid trusted-device
+  cookie is present; TOTP is re-required if it's missing, expired, or it's a
+  new browser/device. Store trusted-device tokens hashed server-side (not just
+  cookie-signed) so they can be individually revoked or all invalidated at once
+  (e.g. on password change or admin-forced reset).
+- Server-side sessions via httpOnly, secure, sameSite cookies — not JWT in
+  localStorage. Session store: Postgres-backed (`connect-pg-simple`) or Redis if
+  preferred at build time
+- **Account creation is admin-issued, not self-service.** You generate a one-time
+  invite token (random string, stored hashed, expiring), share it out-of-band
+  (text, in person, whatever), and the recipient uses it once to set their
+  email/password and enroll TOTP. No email verification step, no email service
+  required anywhere in the app.
+- **Recovery is manual by design.** No password-reset email flow. If a user
+  loses their password and their TOTP backup codes, you reset them directly via
+  DB access on the VPS — see "Manual Account Recovery" below.
+
+## Manual Account Recovery
+
+No email reset flow exists by design. To recover a locked-out user, run these on
+the VPS from the `server/` directory (they need the DB env from `.env`). Two
+paths: the built-in CLI (preferred — handles argon2 hashing) or raw SQL for the
+parts that don't need hashing.
+
+### CLI (preferred) — `scripts/reset-user.js`
+
+```sh
+# Reset password only (also revokes all trusted devices):
+node scripts/reset-user.js --email user@example.com --password 'NewStrongPass1'
+
+# Reset TOTP only — user re-enrolls a fresh authenticator on next login:
+node scripts/reset-user.js --email user@example.com --reset-totp
+
+# Full lockout recovery (new password AND fresh TOTP enrollment):
+node scripts/reset-user.js --email user@example.com --password 'NewStrongPass1' --reset-totp
+
+# Grant / revoke admin:
+node scripts/reset-user.js --email user@example.com --make-admin
+node scripts/reset-user.js --email user@example.com --remove-admin
+```
+
+After `--reset-totp`, the user logs in with their password and is sent straight
+into TOTP re-enrollment (new QR + new backup codes), then verifies a code to
+finish. Any password or TOTP change revokes all of that user's trusted devices.
+
+### Raw SQL (no hashing needed)
+
+Passwords can't be set via raw SQL (argon2 hashing required — use the CLI). But
+these work directly in `psql` (`sudo -u postgres psql -d mmchat`):
+
+```sql
+-- Force fresh TOTP enrollment on next login (deletes the secret + backup codes):
+DELETE FROM totp_secrets WHERE user_id = (SELECT id FROM users WHERE email = 'user@example.com');
+
+-- Revoke all trusted devices (force full re-auth everywhere):
+DELETE FROM trusted_devices WHERE user_id = (SELECT id FROM users WHERE email = 'user@example.com');
+
+-- Toggle admin:
+UPDATE users SET is_admin = true  WHERE email = 'user@example.com';
+UPDATE users SET is_admin = false WHERE email = 'user@example.com';
+
+-- Invalidate a user's live sessions (log them out everywhere):
+DELETE FROM sessions
+ WHERE (sess ->> 'userId') = (SELECT id::text FROM users WHERE email = 'user@example.com');
+```
+
+### First admin (bootstrap)
+
+There's no admin to issue the first invite, so mint one from the CLI (it has DB
+access, so it needs no existing admin):
+
+```sh
+node scripts/create-invite.js --admin
+```
+
+Then open the frontend at the printed `/register?token=…` link to create the
+admin account (sets password, enrolls TOTP, shows backup codes once).
+
+## Core Chat UI
+
+- Sidebar: flat list of chats, "new chat" button, collapse/expand toggle
+- One chat pane per browser tab/window — no split-pane UI. Comparison happens via
+  multiple tabs.
+- Each chat has: one model, one modality (text / image / video), one message
+  thread
+- **User-uploaded input**: all three modalities support attaching an image as
+  input where the model accepts it — vision text models (image in the prompt),
+  image-generation models (a reference image for image-to-image / editing), and
+  video-generation models (a first-frame image for image-to-video). See
+  "Image input across modalities" under Implementation Notes for the per-modality
+  request shapes. Uploaded input files count against the same 5GB local cap /
+  cloud-folder offload as generated output — see schema update below.
+- **Model picker**:
+  - Pulls live list from `GET /api/v1/models`, filtered server-side by modality
+    via `output_modalities` (`text`, `image`, or `all`). Default (no param)
+    returns text models only. Video modality param TBD — see open item below.
+  - Client-side filters: text search by name, and modality. A "specialty"
+    filter (coding, vision, reasoning, etc.) isn't a structured field on this
+    endpoint — approximate it by keyword-matching each model's `description`
+    text if you want this; it won't be a clean, guaranteed taxonomy, just a
+    best-effort filter.
+  - Each entry shows: name, `description` blurb, and pricing (prompt/completion
+    cost per token, or image/video pricing where applicable) — all from the
+    same `/models` response, always visible, no extra API call.
+  - Descriptions sometimes contain embedded markdown links to other model
+    pages — strip or render as plain text, don't show raw markdown syntax.
+- **Provider routing** (how OpenRouter picks which company actually serves a
+  multi-provider model, e.g. Llama/DeepSeek/Mixtral):
+  - Sort toggle: price (default) vs. speed/throughput — maps to `provider.sort`
+  - Privacy toggle: avoid providers that may log/train on prompt data — maps to
+    `provider.data_collection: "deny"` (default `"allow"`)
+  - Sent via the `provider` object on the OpenRouter request. Full allow/deny
+    provider lists and explicit fallback ordering are out of scope for v1 —
+    OpenRouter's automatic fallback behavior is used as-is. Revisit if a
+    specific model's provider quality becomes a real problem.
+- Open item: confirm whether video models are addressable via
+  `output_modalities=video` on this same endpoint, or need to be identified some
+  other way, since video generation runs through a separate `/videos` endpoint
+  rather than `/chat/completions` or `/images`. Not confirmed during planning —
+  verify against current OpenRouter docs during build.
+
+## OpenRouter Integration
+
+| Modality | Endpoint | Notes |
+|---|---|---|
+| Text | `POST /api/v1/chat/completions` | Streamable. Image input via `image_url` content parts. |
+| Image | `POST /api/v1/images` (Unified Image API) | Standardized request shape across 30+ models. Image-to-image via `input_references` (see Implementation Notes). |
+| Video | `POST /api/v1/videos` | **Asynchronous** — job submitted, then polled or pushed via `video.generation.completed` event. Confirm exact completion mechanism (webhook vs poll) against current OpenRouter docs before building this path. Image-to-video via `frame_images` (first-frame). |
+| Credits | `GET /api/v1/auth/key` | Uses the user's own key as bearer token; returns rate limit / credit info for that key. This is what powers the "view credits" link in the profile page. |
+
+**Key storage**: user's OpenRouter API key encrypted at rest, AES-256-GCM, server-
+side master key (env var to start; consider a secrets manager later). Full key
+never returned to client after initial save — display last 4 characters only.
+Decrypt only server-side, only at request time. Never logged.
+
+**Output persistence assumption**: OpenRouter-hosted output URLs are NOT assumed
+persistent (varies by model/provider). Backend fetches and writes every generated
+file (image/video) to storage immediately on completion, regardless of eventual
+destination (local disk or linked cloud folder). No lazy-fetch path.
+
+**Error handling**: invalid/revoked key, insufficient credits, and model-
+unavailable responses from OpenRouter are normal-path occurrences with BYOK, not
+edge cases. Surface the actual OpenRouter error message to the user rather than
+a generic failure, and distinguish "your key/credits" problems (user must act,
+e.g. top up or fix their key) from "this model/provider" problems (user can just
+pick a different model).
+
+**Streaming transport**: text responses stream via Server-Sent Events (SSE), not
+WebSockets — matches the one-directional nature of a completion stream and is
+simpler to run behind a standard reverse proxy on the VPS than WebSocket upgrade
+handling.
+
+**Pending video job reconciliation**: since video generation is async, a chat
+with a message in `pending` state (job submitted, not yet complete) re-checks
+that job's status against OpenRouter on page load, not just via whatever
+completion mechanism fires while the tab is open — covers the case where the
+user closed the tab or the completion event was missed.
+
+## Storage
+
+- **Cap**: 5 GB local storage per user
+- **Notice**: in-app notification at 3.5 GB used
+- **Hard stop**: new local media writes blocked at 5 GB, clear error to user
+- Text messages excluded from the cap — negligible size, only media counts
+- `users.storage_used_bytes` — denormalized running counter, updated on
+  `media_files` insert/delete where `storage_location = 'local'`. Not computed by
+  summing on every request.
+
+### Cloud storage linking (offloads from the 5GB cap)
+
+**Google Drive is the one supported cloud provider (v1).** OAuth2 flow, encrypted
+refresh token stored server-side (same encryption pattern as the OpenRouter key),
+uploads into an app-owned `mmchat` folder in the user's Drive.
+
+Behavior: if a user has Google Drive connected, new generated media uploads there
+instead of local disk, and only a reference (external file id + provider) is
+stored in the DB — doesn't count against the 5GB cap. Not connected → media saves
+to local disk and counts against the cap.
+
+> Additional providers (Dropbox, OneDrive, a generic WebDAV fallback) and
+> multi-provider **priority ordering + per-provider quotas** (with per-account
+> `bytes_used` tracking) are **deferred** — Google Drive is enough for now. See
+> the "## Future updates" section for the full deferred design and the
+> provider-exclusion notes.
+
+### Out-of-band deletion & manual verification
+
+Cloud files live in the user's own Google Drive, so the user can delete them
+directly (in Drive) without going through this app — a door that doesn't exist
+for local disk, where a file can only be removed through the app. When that
+happens, our `media_files` row still references a file that's gone. What must
+degrade gracefully:
+
+- **Serving**: fetching a since-deleted cloud file returns 404/410 from the
+  provider. Render it as "no longer available in your cloud storage" rather than
+  a broken thumbnail — and flag the row so we don't keep re-fetching it.
+- **Accounting** (future): once per-account `bytes_used` tracking exists (deferred
+  — see "## Future updates"), the vanished file's bytes must also stop counting
+  toward that account's quota / fallthrough routing. Cloud media isn't byte-
+  counted today, so this is currently a no-op.
+
+`media_files` is our local manifest of what should exist where (provider +
+external `file_ref` per row), so reconciliation is a walk over that manifest:
+
+- **Lazy detection (automatic, free):** when a serve/fetch of a cloud file
+  returns not-found, flag that row unavailable (`media_files.unavailable_at`)
+  and stop counting its bytes. No polling — it self-heals whenever the file is
+  next accessed.
+- **Manual "Verify cloud files" button (settings), not an automatic sweep:**
+  walks the connected provider's `media_files` rows, checks each is still
+  reachable, and flags the vanished ones (recomputing per-account `bytes_used`
+  from the survivors is a future add-on, once byte-counting exists). Chosen over
+  a background auto-scan deliberately — each
+  check is a per-file network round-trip under the provider's rate limits, so a
+  user with a large library would make an auto-sweep slow and quota-hungry. The
+  user triggers it (with progress feedback) when a number looks wrong.
+
+**Soft-flag, never hard-delete the row.** A file gone from the provider keeps
+its `media_files` row (flagged via `unavailable_at`) — the message history still
+references it and `messages.cost_usd` must survive (they still paid OpenRouter to
+generate the output even though they later deleted it). The message renders
+"output no longer in your cloud storage" with the cost record intact.
+
+Eventual consistency is acceptable: the count may briefly overstate after an
+out-of-band delete, then corrects on next access or on manual verify. This
+mirrors the local counter's recompute utility (Step 7) — per-file `size_bytes`
+is ground truth; the counter is a self-healing cache over it.
+
+## Settings / Account Menu
+
+- Edit profile
+- OpenRouter API key (update key, view last-4, view credits)
+- Spend dashboard (total spend all-time/this month, breakdown by model and by
+  chat, computed from `messages.cost_usd`)
+- Cloud storage (connect/disconnect Google Drive; view local storage used vs 5GB
+  cap; "verify cloud files" to reconcile stored references against Drive after
+  out-of-band deletions)
+- Delete account
+
+## Database Schema
+
+```
+users
+  id, email, password_hash, storage_used_bytes, is_admin, created_at
+  -- is_admin: can generate invite_tokens and reset other users' credentials
+
+totp_secrets
+  user_id, secret, backup_codes (hashed), verified_at
+
+trusted_devices
+  id, user_id, token_hash, created_at, expires_at, last_used_at, user_agent_label
+  -- revocable individually (settings) or in bulk (password change, admin reset)
+
+invite_tokens
+  id, token_hash, created_by_user_id, used_at, expires_at, created_at, is_admin
+  -- admin-generated, single-use, shared out-of-band; replaces self-service signup
+  -- is_admin (migration 002): the account created from this invite becomes an
+  -- admin. Lets the first admin be bootstrapped through the normal invite flow.
+
+api_keys
+  id, user_id, encrypted_key, key_suffix, label, created_at
+
+chats
+  id, user_id, title, model_id, modality (text|image|video), created_at, updated_at
+
+messages
+  id, chat_id, role, content, content_type, cost_usd (nullable), metadata (jsonb), created_at
+  -- cost_usd: computed at generation time from model pricing x actual usage,
+  -- set on assistant/output messages only, null on user messages
+  -- metadata carries modality-specific state, e.g. video job_id + status while pending
+
+media_files
+  id, message_id, direction (input|output),
+  storage_location (local|google_drive|dropbox|onedrive|webdav),
+  storage_account_id (nullable FK -> storage_accounts.id, set when not local),
+  file_ref, size_bytes, unavailable_at (nullable), created_at
+  -- direction: input = user-uploaded (vision/file attach), output = generated
+  -- storage_account_id identifies which specific linked account got the file,
+  -- needed for per-account quota enforcement when multiple providers are linked
+  -- unavailable_at: set when a cloud file is found deleted on the provider side
+  -- (out-of-band) — via lazy detection on serve or the manual "verify cloud
+  -- files" action. The row is kept for history + cost_usd, stops counting toward
+  -- bytes_used, and renders "no longer in your cloud storage". Null for local
+  -- files (local deletion removes the row outright, see Step 7).
+
+storage_accounts
+  id, user_id, provider (google_drive|dropbox|onedrive|webdav),
+  encrypted_refresh_token, folder_ref, priority, quota_bytes (nullable),
+  bytes_used, connected_at
+  -- for webdav: encrypted_refresh_token repurposed for encrypted credentials,
+  -- folder_ref holds the endpoint URL + path
+  -- priority: lower = tried first when multiple providers are linked
+  -- quota_bytes: user-set app-imposed cap for this provider, null = unlimited
+  -- bytes_used: denormalized counter, same pattern as users.storage_used_bytes
+
+sessions
+  -- managed by connect-pg-simple or equivalent session store, not hand-rolled
+```
+
+## Spend Protection (Rate Limiting)
+
+BYOK means each user only burns their own OpenRouter credits — the risk here is
+accidental duplicate spend (double-click, retry, reload re-firing a request),
+not cross-user abuse. Applies to you as a user too, not just other accounts.
+
+- **Idempotency first.** Frontend disables the submit control while a request
+  is in flight. Backend refuses a second generation request against a message
+  that already has one pending. This is the primary protection — it stops
+  accidental duplicate spend at the source, which a rate limit alone won't
+  catch on the first occurrence.
+- **Per-user request caps as a backstop**, generous for text, tighter for
+  image, tightest for video (e.g. cap on concurrent pending video jobs per
+  user, since each one is expensive and long-lived). If deployed under PM2 in
+  cluster mode, this counter must live in Postgres or Redis, not in-process
+  memory — an in-memory counter won't be consistent across worker processes.
+- **Pre-flight balance check** for image/video: check remaining credits via
+  `GET /api/v1/auth/key` (already used for the profile page) before firing an
+  expensive request, and warn if it would draw down a meaningful share of
+  what's left. Informational, not a hard block.
+- **Confirmation step before video generation** specifically — cheap to build,
+  catches accidental/duplicate submits a disabled button alone might miss.
+
+## Spend Tracking
+
+Distinct from the rate-limiting protections above — this is visibility into
+what's actually been spent, not prevention of overspend.
+
+- `messages.cost_usd` — computed and stored at generation time: the model's
+  per-token pricing (already pulled from `/models` for the picker) multiplied
+  by the actual token usage OpenRouter returns in the response, for text; the
+  applicable per-image or per-second rate for image/video. Stored on the
+  assistant/output message row.
+- This is a self-computed estimate, not pulled from OpenRouter's own billing
+  ledger — close enough for personal tracking, but can drift slightly from
+  your real balance in edge cases (provider-level caching discounts, batching,
+  promotional pricing). OpenRouter's own precise per-request billing is only
+  exposed via its Analytics API, which requires a separate management key —
+  a different, more privileged credential than the per-user API key this app
+  is built around, so it's out of scope here.
+- Dashboard (settings, or its own page): total spend (all-time and this
+  month), breakdown by model, and breakdown by chat — three views over the
+  same `cost_usd` data, just grouped differently.
+
+## Security Checklist
+
+- HTTPS only, enforced
+- Argon2 password hashing
+- TOTP as 2nd factor at enrollment and on untrusted devices (not every login —
+  see trusted-device cookie); backup codes issued once at enrollment
+- httpOnly/secure/sameSite session cookies, no tokens in localStorage
+- AES-256-GCM encryption at rest for: OpenRouter key, cloud storage refresh
+  tokens/credentials
+- Rate limiting on login and TOTP verification endpoints
+- No secrets in logs or error responses
+- CSRF protection on state-changing routes
+
+## Open Items — Verify Before/During Build
+
+- ✅ **RESOLVED (Step 6).** OpenRouter video generation completion: it's
+  **asynchronous, polled** — `POST /api/v1/videos` returns `202 {id,
+  polling_url, status}`, then `GET /api/v1/videos/{id}` is polled to terminal
+  status. A `callback_url` webhook exists but is **not used**. See
+  "Implementation Notes & Deviations → Video generation" below.
+- ✅ **RESOLVED (Steps 5–6).** Output URL expiry: build proceeds on the safe
+  "fetch immediately" assumption for both image and video output (implemented).
+- Additional cloud providers (Dropbox / OneDrive / WebDAV / IDrive) are deferred
+  — see "## Future updates" for the design and the provider-exclusion notes.
+
+## Suggested Build Order
+
+1. Auth (signup, login, TOTP enrollment/verify, sessions)
+2. Core chat: single-model text chat, OpenRouter key storage, chat CRUD, sidebar
+3. Model picker + text modality end-to-end
+4. Image modality (Unified Image API)
+5. Video modality (async handling — highest complexity, do last among modalities)
+6. Local storage accounting + 3.5GB/5GB thresholds
+7. Cloud storage: Google Drive (OAuth flow, app folder, upload-on-generate,
+   out-of-band verify)
+8. Settings/account menu, credits display, account deletion
+
+(Additional cloud providers + multi-provider priority/quotas + WebDAV are
+deferred — see "## Future updates".)
+
+---
+
+## Future updates
+
+Deferred beyond v1 — Google Drive is enough for now. Captured here so the intent
+isn't lost; none of this is built.
+
+### Additional cloud storage providers
+- **Dropbox** (DBX Platform) and **Microsoft OneDrive** (Microsoft Graph API) as
+  native OAuth integrations, same pattern as Google Drive (OAuth2, encrypted
+  refresh token, app folder, upload-on-generate, out-of-band verify).
+- **Generic WebDAV fallback** — one adapter (endpoint URL + username/password or
+  app token, entered manually; no native folder picker). Covers Icedrive,
+  Internxt, self-hosted Nextcloud, and similar providers lacking a proper
+  third-party write API.
+- The `storage_accounts.provider` enum + `media_files.storage_location` enum
+  already allow `dropbox|onedrive|webdav`, so adding a provider is a new provider
+  module + routes, not a migration.
+
+**Explicitly excluded** (don't build without re-confirming current docs):
+- iCloud — no public API for third-party write access to a user's iCloud Drive.
+- Mega, NordLocker, Internxt (as a *native* integration) — zero-knowledge/client-
+  side encryption is incompatible with simple server-side writes; Internxt only
+  in scope via the generic WebDAV fallback.
+- IDrive — public docs point to IDrive e2 (S3-compatible), a different product
+  from the consumer backup app; no confirmed general-purpose write API found.
+
+### Multi-provider priority + per-provider quotas
+Only relevant once more than one provider can be linked:
+- User sets an explicit **priority order** among linked providers; new media
+  uploads to the highest-priority one with room.
+- Each provider can have a user-set **quota (GB)** capping how much of *that*
+  account this app may consume. At quota (or on a provider-side failure), uploads
+  **fall through** to the next provider, and finally to local disk (still under
+  the 5GB cap).
+- **Notice banner** when a provider hits its quota (same pattern as the local
+  3.5GB notice), so fallthrough isn't silent.
+- Requires **per-account `bytes_used`** tracking (denormalized counter scoped to
+  each `storage_accounts` row — columns already exist), maintained on
+  upload/delete and re-synced by the "verify cloud files" sweep. This is what the
+  out-of-band verify's `bytes_used` recompute (above) plugs into.
+
+---
+
+## Implementation Notes & Deviations (as built through Step 11 + enhancements)
+
+This section records where the **built** app diverges from, clarifies, or adds
+to the original spec above. The spec captured intent during planning; these are
+the facts discovered during the build. When the two disagree, this section wins
+for anything through Step 11 (and the post-Step-11 enhancements noted as such).
+
+### Model catalogues — separate endpoints per modality
+
+The "Model Picker" spec assumes one list (`GET /api/v1/models`, filtered by
+`output_modalities`). In reality only **text** models come from there:
+
+- **Text** → `GET /api/v1/models` (filtered to text output). *On spec.*
+- **Image** → dedicated **`GET /api/v1/images/models`** (~48 models). The main
+  `/models` list only tags ~3 models as image-output, so filtering it misses
+  almost everything. `output_modalities=image` is **not** how image-gen models
+  are found.
+- **Video** → dedicated **`GET /api/v1/videos/models`**. `output_modalities=video`
+  is **not** a thing; video models are only on this endpoint.
+
+The picker is also **locked to the chat's modality** (no in-picker modality
+selector) — a mismatched pick only errors on send, so it isn't offered. The
+optional keyword "specialty filter" (coding/vision/reasoning) was **not built**.
+
+### Image input across modalities (post-Step-11 enhancement)
+
+All three modalities accept an **uploaded image as input** when the chosen model
+supports it. The composer's attach control is gated on a per-model capability
+check, and the same image is both persisted as `input` media (local, counted
+against the cap — like the text-vision path) and sent to OpenRouter:
+
+- **Text (vision):** image embedded as an `image_url` content part on the chat
+  message. Capability: `input_modalities` includes `image` on `/models`.
+- **Image (image-to-image / edit):** sent to `POST /images` as
+  **`input_references`** — `[{ type:'image_url', image_url:{ url } }]`. Capability:
+  `input_modalities` includes `image` on **`/images/models`** (the image
+  catalogue, *not* `/models`).
+- **Video (image-to-video):** the first uploaded image sent to `POST /videos` as
+  **`frame_images`** — `[{ type:'image_url', image_url:{ url }, frame_type:'first_frame' }]`;
+  capped at one first-frame image. Capability: **`supported_frame_images`** is a
+  non-empty array on **`/videos/models`** (that catalogue has *no*
+  `architecture.input_modalities`; `null` here means text-to-video only, e.g.
+  `openai/sora-2-pro`).
+
+`image_url.url` is a **base64 data URI** in every case (OpenRouter accepts data
+URIs on all three; no public URL needed). The capability lookup is one endpoint —
+`GET /api/models/capabilities?id=&modality=` — which routes to the right
+catalogue by modality; **the chat `/models` list never contains image/video-gen
+models**, so checking it for them always returned false (the original bug). Only
+**images** may be uploaded (never video files). Reference/first-frame input stays
+**local** even when generated output routes to cloud.
+
+> **Infra note:** media uploads pass through the reverse proxy, so its body-size
+> limit must exceed the app's per-file upload cap (multer: 20 MB). nginx's 1 MB
+> default silently `413`s real images before they reach Express — see the deploy
+> host's server reference for the `client_max_body_size` setting.
+
+### Pricing — source, units, and accuracy
+
+The spec assumes pricing is always in the `/models` response ("no extra API
+call"). True for text only:
+
+- **Text**: per-token pricing on `/models`. *On spec.*
+- **Video**: `pricing_skus` on `/videos/models`, billed **per video-second**;
+  keys carry units and some are in **cents** (e.g.
+  `cents_per_video_output_second_480p`). We show the cheapest per-second tier as
+  "from $X/sec".
+- **Image**: **not in the list response.** Pricing is on a per-model
+  sub-endpoint **`GET /api/v1/images/models/{id}/endpoints`** as billable items
+  `{billable, unit, cost_usd}`. Units vary — **per image, per megapixel, or per
+  token**. This requires **extra per-model calls** (concurrency-limited +
+  5-min cached), contradicting the "no extra API call" assumption. Per-token
+  models are shown as "metered" (no meaningful per-image figure).
+- All picker/chip prices are labeled **estimates** with a "verify on
+  openrouter.ai" disclaimer.
+
+### `messages.cost_usd` — prefer OpenRouter's reported cost
+
+The spec describes `cost_usd` as a self-computed estimate. As built we **prefer
+OpenRouter's returned `usage.cost`** (the actual per-request charge) for text,
+image, and video, and only fall back to a computed estimate when it's absent —
+and only when cleanly computable (per-image, not per-MP/per-token). This is more
+accurate than the pure-estimate model the spec described.
+
+### Video generation — async, polled, reconciled (no webhook)
+
+- Flow: `POST /api/v1/videos` → `202 {id, polling_url, status}`; the assistant
+  message is stored `pending` with `jobId`/`pollingUrl`/`jobStatus` in
+  `metadata` and `content_type='video'`. Completion is driven by **polling +
+  reconciliation**, never a webhook (a `callback_url` exists but is unused — no
+  public callback endpoint behind the reverse proxy).
+- Reconcile endpoint re-checks each pending job; on `completed` it fetches
+  `unsigned_urls[]` (download requires the bearer key) and persists bytes
+  immediately, sets `cost_usd` from `usage.cost`, bumps the storage counter; on
+  `failed`/`cancelled`/`expired` it marks the message failed. The client polls
+  reconcile every ~12s **and** on chat load.
+
+### Spend protection — how it's enforced
+
+- **One pending generation per chat**: a Postgres **partial unique index**
+  (migration `003_pending_generation_guard.sql`) on `messages(chat_id) WHERE
+  role='assistant' AND metadata->>'status'='pending'`. Covers image **and**
+  video atomically (blocks double-submit / reload re-fire).
+- **Concurrent video cap** per user: `MAX_CONCURRENT_VIDEOS` (default 2),
+  enforced inside a transaction guarded by a **Postgres advisory lock** to avoid
+  races across chats.
+- **Pre-flight credit check** via `GET /api/v1/auth/key` surfaced in the video
+  **confirmation dialog** (warns if an example 8-second clip would use ≥20% of
+  remaining credits). Informational, not a hard block.
+- Video submit button stays disabled while a job is **pending in that chat**
+  (not just during the brief async submit), including after reload.
+
+### Chat model/type locking + new-chat flow (added, not in original spec)
+
+- A chat's **model is fixed once it has any messages** (UI lock + server 400).
+  The initial pick and idempotent same-value writes are still allowed.
+- A chat's **type (modality) is fixed once it has messages** (UI lock + server
+  400); title edits are still allowed. Changing type on an **empty** chat
+  **clears the selected model** (it would otherwise be a mismatch).
+- **New-chat flow**: creating a chat opens the name/type editor by default and
+  **hides the model picker until the chat's name/type is saved** — set up the
+  chat, then pick a model, then send (which locks it).
+
+### Local storage
+
+- Generated **video** output reuses the same local-storage mechanism as images;
+  video mime types (mp4/webm/mov/mkv) are handled. `isSupportedImage()` stays
+  image-only — **only images can be uploaded** (as vision input, an image-gen
+  reference, or a video first frame); video files are never user-uploaded, only
+  generated as output.
+
+### Local storage accounting (Step 7)
+
+- **Counter maintenance is now symmetric.** `users.storage_used_bytes` is
+  decremented on removal, not just incremented on write. The only removal path is
+  **chat delete** (there are no per-message/per-media delete endpoints), handled
+  in `deleteChatAndReleaseMedia` (`server/src/storage/accounting.js`): inside one
+  transaction it captures the chat's local `file_ref`s + byte total **before** the
+  FK cascade wipes the `media_files` rows, deletes the chat, decrements the owner's
+  counter with a `GREATEST(0, …)` underflow guard, then unlinks the files from
+  disk **after commit** (a failed unlink must not undo a committed delete).
+  App-code, not a DB trigger, by choice.
+- **New endpoint `GET /api/storage`** → `{ usedBytes, capBytes, noticeBytes,
+  atNotice, atCap }`. Not in the original route plan. Reads the counter (no
+  per-request summing) and powers both the persistent notice and the settings
+  display.
+- **Persistent 3.5 GB notice.** The original transient SSE `storageNotice` flag
+  (emitted on the text path, never actually read by the client) is superseded by
+  a shell-level banner backed by `StorageContext` — fetched on load and on window
+  focus, refreshed after each generation/upload/delete. Amber at ≥3.5 GB, red
+  "full" at ≥5 GB. The SSE `storageUsed`/`storageNotice` fields are now vestigial.
+- **5 GB hard stop unchanged; the Generate button is *not* disabled at the cap.**
+  A click is refused **pre-flight** by the server (before any job or spend) with a
+  clear "at your 5 GB limit" message — matching the spec's "blocked write with a
+  clear message." Plain text (no attachment) is never blocked.
+- **Recompute tool: `server/scripts/recompute-storage.js`** (CLI, not an admin
+  route) — resets each user's counter to the true sum of their local
+  `media_files.size_bytes`. `--dry-run` reports drift, `--email` scopes to one
+  user, no args does all. Repairs the drift left by pre-Step-7 increment-only
+  builds. The counter is a self-healing cache; per-file `size_bytes` is truth.
+- **Orphaned disk files + sweep tool.** Orphans (files on disk with no
+  `media_files` row) can arise from a crash mid-write (bytes written, DB row never
+  committed) or a failed post-commit unlink — and pre-Step-7 deletes left some.
+  The normal delete path no longer creates them, and **`recompute-storage.js
+  --sweep-orphans`** cleans up any that occur: it removes local files under
+  `storageDir/<userId>/` that no local `media_files` row references **and** that
+  are older than 5 minutes (the age guard means an in-flight write whose row
+  hasn't committed is never swept out from under an active generation). Combine
+  with `--dry-run` to preview, `--email` to scope to one user. Orphans are
+  untracked, so the sweep never touches the counter. This is the on-disk sibling
+  of the Step 8 cloud "verify" reconciliation (`findOrphanFiles` /
+  `deleteOrphanFiles` in `server/src/storage/accounting.js`).
+- **No schema migration** was needed for Step 7 (pure app logic;
+  `media_files.unavailable_at` in the schema block is a Step 8 addition, not yet
+  migrated).
+
+### Cloud storage — Google Drive (Step 8)
+
+- **Raw REST over `fetch`, no `googleapis` SDK** — matches the OpenRouter client
+  style, keeps deps light, and lets the Google base URLs be pointed at a mock in
+  tests (`GOOGLE_AUTH_BASE` / `GOOGLE_OAUTH_BASE` / `GOOGLE_API_BASE`).
+  `server/src/storage/providers/googleDrive.js`.
+- **Scope `drive.file` + app-created folder, not the Google Picker.** Least
+  privilege (the app only ever sees files it creates, so no Google security
+  review is triggered). On connect the app reuses (or creates) its own `mmchat`
+  folder at the Drive root and uploads into it — reconnect finds the existing
+  folder by name via `files.list` (which under `drive.file` only returns files
+  this app created, so it can't match an unrelated user folder) rather than
+  spawning duplicates. This is the "reasonable folder assignment" the spec allows
+  in place of a native picker. The user can't currently target an arbitrary
+  pre-existing folder (a `drive.file` limitation); revisit with the Picker if
+  needed.
+- **OAuth is server-side authorization-code with `access_type=offline` +
+  `prompt=consent`** (forces a refresh_token every time). Refresh token stored
+  **encrypted** (same AES-256-GCM helper as the OpenRouter key); short-lived
+  access tokens are derived on demand and cached in-process
+  (`storage/accounts.js`). Endpoints: `GET /api/storage/google/connect` (302 →
+  Google, CSRF `state` in session), `GET /api/storage/google/callback`,
+  `DELETE /api/storage/google`, `GET /api/storage/providers`,
+  `POST /api/storage/verify`.
+- **Config / env (all optional):** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+  `PUBLIC_BASE_URL` (builds the redirect URI `…/api/storage/google/callback`). If
+  unset, Drive simply isn't offered and everything stays local.
+- **Migration 004** adds `media_files.unavailable_at` (out-of-band flag) **and**
+  `media_files.content_type` (a cloud `file_ref` is an opaque Drive id with no
+  extension to infer MIME from — local rows still fall back to extension), plus a
+  `storage_accounts (user_id, provider)` UNIQUE so reconnect is an idempotent
+  upsert.
+- **Only generation output routes to cloud this pass; uploaded vision *input*
+  stays local.** The Step 8 prompt scoped cloud offload to generated media; a
+  shared `storage/output.js` (`resolveOutputTarget` / `persistGeneratedOutput`)
+  now backs both image + video generation and decides cloud-vs-local in one
+  place. Cloud writes record only the external reference and **do not** touch
+  `users.storage_used_bytes`; the 5 GB pre-flight cap is skipped when the target
+  is cloud. Input attachments could be folded in later.
+- **Serving cloud media** (`/api/media/:id`) streams the file down from Drive
+  with a fresh access token. Out-of-band handling: a Drive **404 → set
+  `unavailable_at` → 410**; an already-flagged row 410s without re-fetching
+  (lazy detection). A cloud row whose account was **disconnected** (FK set the
+  `storage_account_id` NULL) also 410s ("no longer connected"). The client
+  renders a **placeholder** for `unavailable` attachments and has an `onError`
+  fallback that swaps a broken img/video for the same placeholder.
+- **"Verify cloud files"** (`POST /api/storage/verify`, button in Settings) walks
+  the user's still-available Drive media and flags any the provider reports gone
+  (404 or trashed). **Soft-flag only** — rows are kept so history + `cost_usd`
+  survive. Per-account `bytes_used` recompute is **deferred** (Future updates) —
+  no cloud byte counter exists yet.
+- **Disconnect** revokes at Google (best-effort) and drops the `storage_accounts`
+  row. The FK (`ON DELETE SET NULL`) nulls `storage_account_id` on the user's
+  existing cloud media, which then serve as the "unavailable" placeholder while
+  disconnected. Files in the user's Drive are never deleted.
+- **Reconnect re-adopts orphaned media.** `saveAccount` re-links the user's
+  same-provider, NULL-account, not-yet-flagged `media_files` rows to the new
+  account — so reconnecting (the same Google account) restores access to
+  previously-generated files instead of leaving them stuck on the placeholder.
+  If a *different* account is connected, files it can't reach just flag
+  unavailable on the next serve, so the re-link is safe either way. (Without
+  this, disconnect→reconnect would orphan all prior cloud media permanently.)
+- **Chat delete leaves cloud files in Drive (deliberate — not a bug).** Deleting
+  a chat removes its DB rows (cascade) and unlinks its **local** files from disk +
+  decrements the counter (Step 7), but **does not delete cloud files** — they
+  persist in the user's `mmchat` Drive folder. Intentional: the folder doubles as
+  a **media library** that survives chat cleanup, so a user who never copied
+  media out of the cloud folder doesn't lose it when they tidy up old chats.
+  Cloud cleanup is the user's to do (in their own Drive). This local-deleted /
+  cloud-kept asymmetry is by design; account deletion (Step 11) likewise leaves
+  cloud files untouched.
+- **Media serve caching**: cloud 200s use a short `max-age=60, must-revalidate`
+  (files can vanish out-of-band, so don't pin them long); every error/410/404
+  response sets `Cache-Control: no-store` so a transient failure (e.g. a briefly
+  disconnected provider) can't be heuristically cached and keep showing the
+  placeholder after the file is reachable again. Local 200s stay long-immutable.
+- **Message ordering**: a generated turn inserts the user prompt + assistant
+  message in one transaction, so both would share `now()` (the transaction
+  timestamp) and sort ambiguously. Fixed by writing `created_at` with
+  `clock_timestamp()` (distinct per statement) and ordering
+  `created_at ASC, (role <> 'user') ASC` so the prompt always precedes its output.
+
+### Settings / account menu (Step 11)
+
+All under a new **`server/src/account/`** module (`routes.js` + `service.js`),
+mounted at **`/api/account`**.
+
+- **`cost_usd` was already stored — Step 11 only aggregates it.** The Step 11
+  prompt says to "compute and store `cost_usd` at generation time," but that was
+  already built across Steps 3/5/6 (text/image/video), preferring OpenRouter's
+  reported `usage.cost` (see "`messages.cost_usd` — prefer OpenRouter's reported
+  cost" above). Step 11 added **no** new write-path — the spend dashboard is a
+  read-only aggregation over the existing rows.
+- **Profile = email + password only.** The `users` table carries no display-name
+  or other profile column, so "edit profile" is email + password. The Settings
+  "Profile" section shows the email read-only with an **Edit** button that opens
+  a **modal** (Change email / Change password toggle) — nothing sensitive sits
+  inline on the page. **Either** change requires re-entering the **current
+  password** (`PATCH /api/account/profile`, server-verified). A **password**
+  change also requires a **confirm-password** field (typo guard, client-side)
+  and, server-side, **revokes all trusted devices** + clears this browser's
+  trusted-device cookie (per the bible's "any password change revokes trusted
+  devices"), so TOTP is re-required on next login everywhere. Email uniqueness is
+  enforced (409 on collision).
+- **Credits display reuses the existing endpoint.** No new route — the "View
+  credits" button in the API-key section calls the already-built
+  `GET /api/keys/credits` (→ OpenRouter `GET /auth/key`), shown on demand rather
+  than on every settings load.
+- **Spend dashboard** (`GET /api/account/spend`): all-time + this-calendar-month
+  totals, plus **by-model** and **by-chat** breakdowns, all as `float8`
+  aggregates over `messages.cost_usd` (only rows where it's non-null — i.e.
+  assistant/output turns). Model is `metadata ->> 'model'` with a fallback to the
+  chat's `model_id`. **It only reflects chats the user still has:** deleting a
+  chat cascades its `messages` (and their `cost_usd`), so a heavily-pruned account
+  reads **well below** its true OpenRouter spend — the UI states this explicitly.
+  Still a self-computed estimate ("verify on openrouter.ai"), consistent with the
+  spend-tracking spec.
+- **Delete account** (`DELETE /api/account`) — two confirmation gates: the client
+  requires typing `DELETE`, and the server requires the **current password**.
+  Order: (1) best-effort revoke the Google Drive token at the provider (needs the
+  still-present encrypted refresh token, so it runs first) and drop the account
+  row; (2) `DELETE FROM users` — the FK cascade removes chats, messages,
+  media_files, api_keys, totp_secrets, trusted_devices, storage_accounts; (3)
+  purge the user's `sessions` rows explicitly (connect-pg-simple owns that table —
+  no FK to cascade — matched via `sess ->> 'userId'`); (4) remove the user's local
+  media directory from disk (new helper `deleteUserStorageDir` in
+  `storage/local.js`). **Files already in the user's own Drive are left
+  untouched** (matches the local-deleted / cloud-kept asymmetry from Step 8).
+  Then the current session + cookies are torn down.
+- **"Contact me" button (added, not in original spec).** A Settings "Contact"
+  section with a `mailto:` button, plus text showing the address so it works even
+  without a configured mail client. The address comes from a **`VITE_CONTACT_EMAIL`**
+  env var (client `.env`, gitignored; placeholder in the committed
+  `client/.env.example`) — **not hardcoded**, to keep the deployment domain out of
+  the public repo. The section only renders when the var is set, so it must also
+  be present in the production build env. This is the first client-side env var
+  (previously only the inline `VITE_BEHIND_PROXY` dev flag existed).
+- **No schema migration** — every table/column Step 11 needs already exists.
+````
+
+### File: `client/.env.example`
+
+```ini
+# Client (Vite) environment. Copy to client/.env and fill in real values.
+# Only VITE_-prefixed vars are exposed to the browser bundle.
+
+# Address for the Settings "Contact me" button. Leave blank to hide the section.
+VITE_CONTACT_EMAIL=
+```
+
+### File: `client/index.html`
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Multi-Model AI Chat Client</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+```
+
+### File: `client/package.json`
+
+```json
+{
+  "name": "@mmchat/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Multi-Model AI Chat Client — React + Vite frontend",
+  "scripts": {
+    "dev": "vite",
+    "dev:proxy": "VITE_BEHIND_PROXY=1 vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.7"
+  }
+}
+```
+
+### File: `client/src/App.jsx`
+
+```jsx
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { useAuth } from './auth/AuthContext.jsx';
+import LoginPage from './pages/LoginPage.jsx';
+import RegisterPage from './pages/RegisterPage.jsx';
+import ChatLayout from './chat/ChatLayout.jsx';
+import ChatIndex from './pages/ChatIndex.jsx';
+import ChatPage from './pages/ChatPage.jsx';
+import SettingsPage from './pages/SettingsPage.jsx';
+
+function RequireAuth({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="loading">Loading…</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
+}
+
+function PublicOnly({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="loading">Loading…</div>;
+  if (user) return <Navigate to="/" replace />;
+  return children;
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<PublicOnly><LoginPage /></PublicOnly>} />
+      <Route path="/register" element={<PublicOnly><RegisterPage /></PublicOnly>} />
+
+      <Route element={<RequireAuth><ChatLayout /></RequireAuth>}>
+        <Route path="/" element={<ChatIndex />} />
+        <Route path="/chat/:chatId" element={<ChatPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+      </Route>
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+```
+
+### File: `client/src/api.js`
+
+```javascript
+// Thin fetch wrapper. All requests go to the same-origin /api path (Vite proxies
+// to the backend in dev; nginx in prod), with cookies included for the session.
+
+export class ApiError extends Error {
+  constructor(message, status, data) {
+    super(message);
+    this.status = status;
+    this.data = data;
+  }
+}
+
+export async function api(path, { method = 'GET', body } = {}) {
+  // FormData bodies are sent as-is so the browser sets the multipart boundary;
+  // everything else is JSON-encoded.
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
+  const res = await fetch(`/api${path}`, {
+    method,
+    headers: body && !isForm ? { 'Content-Type': 'application/json' } : {},
+    body: body == null ? undefined : isForm ? body : JSON.stringify(body),
+    credentials: 'include',
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiError(data.error || res.statusText, res.status, data);
+  }
+  return data;
+}
+```
+
+### File: `client/src/auth/AuthContext.jsx`
+
+```jsx
+import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { api } from '../api.js';
+
+const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      const { user } = await api('/auth/me');
+      setUser(user);
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const logout = useCallback(async () => {
+    await api('/auth/logout', { method: 'POST' }).catch(() => {});
+    setUser(null);
+  }, []);
+
+  return (
+    <AuthContext.Provider value={{ user, loading, setUser, refresh, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+  return ctx;
+}
+```
+
+### File: `client/src/auth/EnrollTotp.jsx`
+
+```jsx
+import { useState } from 'react';
+import { api } from '../api.js';
+
+// Renders the TOTP enrollment step: QR + manual secret + one-time backup codes,
+// then a code field to confirm. Used by both first-time signup and recovery
+// re-enrollment. Calls onEnrolled(user) once the code verifies.
+export default function EnrollTotp({ enrollment, onEnrolled }) {
+  const [code, setCode] = useState('');
+  const [savedCodes, setSavedCodes] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const { user } = await api('/auth/register/verify', { method: 'POST', body: { code } });
+      onEnrolled(user);
+    } catch (err) {
+      setError(err.message || 'Verification failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>Set up two-factor authentication</h2>
+      <p className="muted">Scan this QR code with an authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
+
+      <img className="qr" src={enrollment.qrDataUrl} alt="TOTP QR code" width={200} height={200} />
+
+      <details className="manual">
+        <summary>Can't scan? Enter this secret manually</summary>
+        <code className="secret">{enrollment.secret}</code>
+      </details>
+
+      <div className="backup">
+        <h3>Backup codes</h3>
+        <p className="muted">Save these somewhere safe. Each works once if you lose your authenticator. They won't be shown again.</p>
+        <ul className="codes">
+          {enrollment.backupCodes.map((c) => (
+            <li key={c}><code>{c}</code></li>
+          ))}
+        </ul>
+        <label className="check">
+          <input type="checkbox" checked={savedCodes} onChange={(e) => setSavedCodes(e.target.checked)} />
+          I've saved my backup codes
+        </label>
+      </div>
+
+      <form onSubmit={submit}>
+        <label>
+          Enter the 6-digit code from your app
+          <input
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="123456"
+            required
+          />
+        </label>
+        {error && <p className="error">{error}</p>}
+        <button type="submit" disabled={busy || !savedCodes || code.length < 6}>
+          {busy ? 'Verifying…' : 'Confirm & finish'}
+        </button>
+        {!savedCodes && <p className="muted small">Confirm you've saved your backup codes to continue.</p>}
+      </form>
+    </div>
+  );
+}
+```
+
+### File: `client/src/chat/ChatLayout.jsx`
+
+```jsx
+import { useState } from 'react';
+import { Outlet } from 'react-router-dom';
+import { ChatsProvider } from './ChatsContext.jsx';
+import { StorageProvider } from './StorageContext.jsx';
+import StorageNotice from './StorageNotice.jsx';
+import { useAuth } from '../auth/AuthContext.jsx';
+import Sidebar from './Sidebar.jsx';
+
+// The authenticated app shell: persistent sidebar + a top bar, with the routed
+// pane (chat / settings / index placeholder) rendered into the <Outlet/>.
+export default function ChatLayout() {
+  const { user, logout } = useAuth();
+  const [collapsed, setCollapsed] = useState(false);
+
+  return (
+    <ChatsProvider>
+      <StorageProvider>
+        <div className={`app-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
+          <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
+          <div className="main-col">
+            <header className="topbar">
+              <strong>mmchat</strong>
+              <div className="topbar-right">
+                <span className="muted small">
+                  {user.email}{user.isAdmin ? ' · admin' : ''}
+                </span>
+                <button className="link-btn" onClick={logout}>Log out</button>
+              </div>
+            </header>
+            <StorageNotice />
+            <main className="pane">
+              <Outlet />
+            </main>
+          </div>
+        </div>
+      </StorageProvider>
+    </ChatsProvider>
+  );
+}
+```
+
+### File: `client/src/chat/ChatsContext.jsx`
+
+```jsx
+import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { api } from '../api.js';
+
+// Holds the logged-in user's chat list plus CRUD helpers, shared between the
+// sidebar and the chat pane so both stay in sync without prop-drilling.
+const ChatsContext = createContext(null);
+
+export function ChatsProvider({ children }) {
+  const [chats, setChats] = useState([]);
+  const [loading, setLoading] = useState(true);
+  // Which chat's settings editor is open (null = none). The editor lives in the
+  // chat pane but is toggled from the sidebar's ⋯ menu, so the flag is shared.
+  const [editingChatId, setEditingChatId] = useState(null);
+  const toggleEditor = useCallback((id) => {
+    setEditingChatId((prev) => (prev === id ? null : id));
+  }, []);
+  const openEditor = useCallback((id) => setEditingChatId(id), []);
+  const closeEditor = useCallback(() => setEditingChatId(null), []);
+
+  const refresh = useCallback(async () => {
+    try {
+      const { chats } = await api('/chats');
+      setChats(chats);
+    } catch {
+      setChats([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const createChat = useCallback(async ({ title, modality = 'text' } = {}) => {
+    const { chat } = await api('/chats', { method: 'POST', body: { title, modality } });
+    setChats((prev) => [chat, ...prev]);
+    return chat;
+  }, []);
+
+  const updateChat = useCallback(async (id, patch) => {
+    const { chat } = await api(`/chats/${id}`, { method: 'PATCH', body: patch });
+    // Re-sort by updated_at (the patch bumps it) so the touched chat floats up.
+    setChats((prev) =>
+      [chat, ...prev.filter((c) => c.id !== id)].sort(
+        (a, b) => new Date(b.updatedAt) - new Date(a.updatedAt),
+      ),
+    );
+    return chat;
+  }, []);
+
+  const deleteChat = useCallback(async (id) => {
+    await api(`/chats/${id}`, { method: 'DELETE' });
+    setChats((prev) => prev.filter((c) => c.id !== id));
+    setEditingChatId((prev) => (prev === id ? null : prev));
+  }, []);
+
+  return (
+    <ChatsContext.Provider
+      value={{
+        chats, loading, refresh, createChat, updateChat, deleteChat,
+        editingChatId, toggleEditor, openEditor, closeEditor,
+      }}
+    >
+      {children}
+    </ChatsContext.Provider>
+  );
+}
+
+export function useChats() {
+  const ctx = useContext(ChatsContext);
+  if (!ctx) throw new Error('useChats must be used within ChatsProvider');
+  return ctx;
+}
+```
+
+### File: `client/src/chat/ModelPicker.jsx`
+
+```jsx
+import { useEffect, useMemo, useState } from 'react';
+import { api } from '../api.js';
+
+// Format an OpenRouter per-token USD price string as $/million tokens.
+function perMillion(price) {
+  if (price == null || price === '') return null; // absent ≠ free
+  const n = Number(price);
+  if (!Number.isFinite(n)) return null;
+  if (n === 0) return 'free';
+  const m = n * 1_000_000;
+  return `$${m >= 1 ? m.toFixed(2) : m.toPrecision(2)}/M`;
+}
+
+// USD with enough precision for small rates ($0.0000 is useless); never exponential.
+function fmtUsd(v) {
+  if (v >= 0.01) return `$${v.toFixed(2)}`;
+  if (v >= 0.0001) return `$${v.toFixed(4)}`;
+  return `$${v.toFixed(6)}`;
+}
+
+// Short label for an image billing unit (e.g. "megapixel" → "MP").
+function imgUnit(u) {
+  if (!u) return 'image';
+  const s = String(u).toLowerCase();
+  if (s.includes('megapixel') || s === 'mp') return 'MP';
+  if (s.includes('token')) return 'token';
+  if (s.includes('image')) return 'image';
+  return s;
+}
+
+// Image rate for the picker: per-token models are metered (a tiny per-token
+// number is meaningless to compare), so label them rather than print a figure.
+function imgRate(cost, unit) {
+  if (String(unit || '').toLowerCase().includes('token')) return 'per-token (metered)';
+  return Number.isFinite(cost) && cost > 0 ? `from ${fmtUsd(cost)}/${imgUnit(unit)}` : null;
+}
+
+function priceLabel(p) {
+  const parts = [];
+  const prompt = perMillion(p.prompt);
+  const completion = perMillion(p.completion);
+  if (prompt) parts.push(`in ${prompt}`);
+  if (completion) parts.push(`out ${completion}`);
+  const imgLabel = imgRate(Number(p.image), p.imageUnit);
+  if (imgLabel) parts.push(imgLabel);
+  const vid = Number(p.video);
+  if (Number.isFinite(vid) && vid > 0) parts.push(`from ${fmtUsd(vid)}/sec`);
+  return parts.length ? parts.join(' · ') : 'pricing n/a';
+}
+
+// Modal model picker. Fetches the live catalogue for the chosen modality and
+// filters client-side by a text search over name/id/description.
+export default function ModelPicker({ modality = 'text', currentModelId, onSelect, onClose }) {
+  const [models, setModels] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [q, setQ] = useState('');
+
+  // The picker only ever shows models for THIS chat's modality — a mismatched
+  // pick just errors on send, so it isn't offered. The type is fixed by the chat.
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError('');
+    api(`/models?modality=${modality}`)
+      .then((res) => { if (alive) setModels(res.models); })
+      .catch((err) => { if (alive) setError(err.message || 'Failed to load models'); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [modality]);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return models;
+    return models.filter(
+      (m) =>
+        m.name.toLowerCase().includes(needle) ||
+        m.id.toLowerCase().includes(needle) ||
+        (m.description || '').toLowerCase().includes(needle),
+    );
+  }, [models, q]);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2>Choose a {modality} model</h2>
+          <button className="close-x" title="Close" aria-label="Close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="picker-filters">
+          <input
+            type="text"
+            placeholder={`Search ${modality} models…`}
+            value={q}
+            autoFocus
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+
+        <div className="model-list">
+          {loading && <p className="muted pad">Loading models…</p>}
+          {error && <p className="error pad">{error}</p>}
+          {!loading && !error && filtered.length === 0 && (
+            <p className="muted pad">No models match.</p>
+          )}
+          {!loading && !error && filtered.map((m) => (
+            <button
+              key={m.id}
+              className={`model-item${m.id === currentModelId ? ' selected' : ''}`}
+              onClick={() => { onSelect(m); onClose(); }}
+            >
+              <div className="model-item-head">
+                <span className="model-name">
+                  {m.name}
+                  {m.inputModalities?.includes('image') && <span className="badge vision" title="Accepts image input">vision</span>}
+                </span>
+                <span className="model-price">{priceLabel(m.pricing)}</span>
+              </div>
+              <div className="model-id muted small">{m.id}</div>
+              {m.description && <p className="model-desc muted small">{m.description}</p>}
+            </button>
+          ))}
+        </div>
+
+        <p className="picker-disclaimer muted small">
+          Prices are estimates and <strong>may be inaccurate</strong> — verify on{' '}
+          <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer">openrouter.ai</a> before relying on them.
+        </p>
+      </div>
+    </div>
+  );
+}
+```
+
+### File: `client/src/chat/Sidebar.jsx`
+
+```jsx
+import { NavLink, useNavigate } from 'react-router-dom';
+import { useChats } from './ChatsContext.jsx';
+
+// Flat list of the user's chats + a "new chat" button. The collapse/expand
+// toggle is owned by ChatLayout and passed in.
+export default function Sidebar({ collapsed, onToggle }) {
+  const { chats, loading, createChat, openEditor, toggleEditor } = useChats();
+  const navigate = useNavigate();
+
+  async function handleNewChat() {
+    try {
+      const chat = await createChat({ modality: 'text' });
+      navigate(`/chat/${chat.id}`);
+      // Open the name/type editor by default so a fresh chat is ready to set up.
+      openEditor(chat.id);
+    } catch {
+      // createChat surfaces errors in the pane; keep the sidebar quiet.
+    }
+  }
+
+  // ⋯ menu: open (toggle) that chat's settings editor, ensuring we're on it.
+  function handleMenu(e, id) {
+    e.preventDefault();
+    e.stopPropagation();
+    navigate(`/chat/${id}`);
+    toggleEditor(id);
+  }
+
+  if (collapsed) {
+    return (
+      <aside className="sidebar collapsed">
+        <button className="icon-btn" title="Expand sidebar" onClick={onToggle}>»</button>
+        <button className="icon-btn" title="New chat" onClick={handleNewChat}>+</button>
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-head">
+        <button className="new-chat" onClick={handleNewChat}>+ New chat</button>
+        <button className="icon-btn" title="Collapse sidebar" onClick={onToggle}>«</button>
+      </div>
+
+      <nav className="chat-list">
+        {loading && <p className="muted small pad">Loading…</p>}
+        {!loading && chats.length === 0 && (
+          <p className="muted small pad">No chats yet. Start one above.</p>
+        )}
+        {chats.map((c) => (
+          <div key={c.id} className="chat-row">
+            <NavLink
+              to={`/chat/${c.id}`}
+              className={({ isActive }) => `chat-item${isActive ? ' active' : ''}`}
+            >
+              <span className="chat-title">{c.title || 'Untitled chat'}</span>
+              <span className="chat-modality">{c.modality}</span>
+            </NavLink>
+            <button
+              className="kebab"
+              title="Chat options"
+              aria-label="Chat options"
+              onClick={(e) => handleMenu(e, c.id)}
+            >
+              ⋯
+            </button>
+          </div>
+        ))}
+      </nav>
+
+      <div className="sidebar-foot">
+        <NavLink to="/settings" className="foot-link">⚙ Settings</NavLink>
+      </div>
+    </aside>
+  );
+}
+```
+
+### File: `client/src/chat/StorageContext.jsx`
+
+```jsx
+import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { api } from '../api.js';
+
+// Shared local-storage usage, so the persistent 3.5 GB notice and the settings
+// display read one source. Fetched on load (not just after the write that
+// crossed the threshold) and on window focus (catches changes from other tabs),
+// plus an explicit refresh() the chat pane calls after a generation or delete.
+const StorageContext = createContext(null);
+
+export function StorageProvider({ children }) {
+  const [status, setStatus] = useState(null); // { usedBytes, capBytes, noticeBytes, atNotice, atCap }
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await api('/storage'));
+    } catch {
+      /* leave the last-known status in place on a transient failure */
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const onFocus = () => refresh();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refresh]);
+
+  return (
+    <StorageContext.Provider value={{ status, refresh }}>
+      {children}
+    </StorageContext.Provider>
+  );
+}
+
+export function useStorage() {
+  const ctx = useContext(StorageContext);
+  if (!ctx) throw new Error('useStorage must be used within StorageProvider');
+  return ctx;
+}
+
+// GB formatting shared by the banner and settings display.
+export function fmtGb(bytes) {
+  return `${(Number(bytes || 0) / 1024 ** 3).toFixed(1)} GB`;
+}
+```
+
+### File: `client/src/chat/StorageNotice.jsx`
+
+```jsx
+import { Link } from 'react-router-dom';
+import { useStorage, fmtGb } from './StorageContext.jsx';
+
+// Persistent local-storage banner. Shown on every page (it lives in the shell,
+// above the routed pane) whenever the user is at/over the 3.5 GB notice — and,
+// more urgently, at/over the 5 GB cap where new local writes are blocked. Driven
+// by the shared storage status, so it appears on load, not only right after the
+// write that crossed the line.
+export default function StorageNotice() {
+  const { status } = useStorage();
+  if (!status || !status.atNotice) return null;
+
+  const used = fmtGb(status.usedBytes);
+  const cap = fmtGb(status.capBytes);
+
+  return (
+    <div className={`storage-notice${status.atCap ? ' at-cap' : ''}`} role="status">
+      {status.atCap ? (
+        <span>
+          <strong>Local storage full — {used} of {cap}.</strong>{' '}
+          New uploads and image/video generations are blocked. Existing chats and
+          text still work. Delete some media in <Link to="/settings">Settings</Link> to free space.
+        </span>
+      ) : (
+        <span>
+          <strong>Local storage at {used} of {cap}.</strong>{' '}
+          You're approaching the limit — new media writes are blocked once you
+          reach {cap}. Manage storage in <Link to="/settings">Settings</Link>.
+        </span>
+      )}
+    </div>
+  );
+}
+```
+
+### File: `client/src/chat/VideoConfirm.jsx`
+
+```jsx
+import { useEffect, useState } from 'react';
+import { api } from '../api.js';
+
+// USD → short label. Small amounts get more precision.
+function money(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return null;
+  if (x >= 0.01) return `$${x.toFixed(2)}`;
+  if (x >= 0.0001) return `$${x.toFixed(4)}`;
+  return `$${x.toPrecision(2)}`;
+}
+
+// A nominal clip length for turning a per-second rate into an example total —
+// providers apply their own default duration, so this is illustrative only.
+const EXAMPLE_SECONDS = 8;
+
+// Confirmation step before a (real, billable) video generation — bible Spend
+// Protection. Reads the key's live credit balance for a pre-flight check and
+// warns if an example clip would draw down a meaningful share of what's left.
+// `perSecond` is USD per second of output (video is billed per video-second).
+export default function VideoConfirm({ modelId, perSecond, onConfirm, onCancel }) {
+  const [credits, setCredits] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    api('/keys/credits')
+      .then((c) => { if (alive) setCredits(c); })
+      .catch((e) => { if (alive) setErr(e.message || 'Could not read credit balance.'); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+
+  const remaining = credits?.remaining;
+  const rate = Number(perSecond);
+  const hasRate = Number.isFinite(rate) && rate > 0;
+  const exampleTotal = hasRate ? rate * EXAMPLE_SECONDS : null; // ~ an 8-second clip
+  const share = exampleTotal != null && Number.isFinite(remaining) && remaining > 0
+    ? exampleTotal / remaining
+    : null;
+  const bigShare = share != null && share >= 0.2;
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal confirm" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2>Generate video?</h2>
+          <button className="close-x" title="Close" aria-label="Close" onClick={onCancel}>✕</button>
+        </div>
+
+        <div className="confirm-body">
+          <p>This submits a <strong>real, billable</strong> video generation to OpenRouter using your key.</p>
+          <ul className="confirm-facts">
+            <li>Model: <code>{modelId}</code></li>
+            <li>
+              Rate:{' '}
+              {hasRate
+                ? <>from <strong>~{money(rate)}/second</strong> of output <span className="muted">(cheapest resolution; ≈ {money(exampleTotal)} for an {EXAMPLE_SECONDS}s clip, more at higher res)</span></>
+                : <em>not per-second for this model — cost is metered per the provider’s units and shown after it generates</em>}
+            </li>
+            <li>
+              Credits remaining:{' '}
+              {loading ? '…'
+                : err ? <span className="muted">unavailable</span>
+                : Number.isFinite(remaining) ? <strong>{money(remaining)}</strong>
+                : credits?.limit == null ? <span className="muted">no limit set on this key</span>
+                : '—'}
+            </li>
+          </ul>
+          {bigShare && (
+            <p className="warn">⚠ An {EXAMPLE_SECONDS}-second clip would use about <strong>{Math.round(share * 100)}%</strong> of your remaining credits.</p>
+          )}
+          <p className="muted small">
+            Video jobs are asynchronous and can take several minutes. You can leave the page — the result is
+            fetched and stored automatically.
+          </p>
+        </div>
+
+        <div className="row-btns">
+          <button className="danger-solid" onClick={onConfirm}>Generate video</button>
+          <button className="ghost" onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+### File: `client/src/chat/stream.js`
+
+```javascript
+import { ApiError } from '../api.js';
+
+// POST a message and consume the streamed reply. The endpoint returns either a
+// normal JSON error (pre-flight / immediate OpenRouter rejection) — surfaced as
+// an ApiError whose .data.category drives the UI — or an SSE stream of events:
+//   { type: 'user',  id, createdAt }        the persisted user turn
+//   { type: 'delta', text }                 an incremental chunk of the reply
+//   { type: 'error', category, message, messageId }
+//   { type: 'done',  messageId, cost }
+export async function streamMessage(chatId, body, handlers = {}) {
+  const isForm = body instanceof FormData;
+  const res = await fetch(`/api/chats/${chatId}/messages`, {
+    method: 'POST',
+    // For FormData, let the browser set the multipart Content-Type + boundary.
+    headers: isForm ? {} : { 'Content-Type': 'application/json' },
+    body: isForm ? body : JSON.stringify(body),
+    credentials: 'include',
+  });
+
+  if (!res.ok || !res.headers.get('content-type')?.includes('text/event-stream')) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(data.error || res.statusText, res.status, data);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, nl).replace(/\r$/, '');
+      buffer = buffer.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload) continue;
+      let evt;
+      try { evt = JSON.parse(payload); } catch { continue; }
+      if (evt.type === 'user') handlers.onUser?.(evt);
+      else if (evt.type === 'delta') handlers.onDelta?.(evt.text);
+      else if (evt.type === 'error') handlers.onError?.(evt);
+      else if (evt.type === 'done') handlers.onDone?.(evt);
+    }
+  }
+}
+```
+
+### File: `client/src/main.jsx`
+
+```jsx
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import App from './App.jsx';
+import { AuthProvider } from './auth/AuthContext.jsx';
+import './styles.css';
+
+createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </BrowserRouter>
+  </React.StrictMode>,
+);
+```
+
+### File: `client/src/pages/ChatIndex.jsx`
+
+```jsx
+import { useNavigate } from 'react-router-dom';
+import { useChats } from '../chat/ChatsContext.jsx';
+
+// The pane shown at "/" — no chat selected yet.
+export default function ChatIndex() {
+  const { createChat, openEditor } = useChats();
+  const navigate = useNavigate();
+
+  async function start() {
+    const chat = await createChat({ modality: 'text' });
+    navigate(`/chat/${chat.id}`);
+    // Open the name/type editor by default so a fresh chat is set up first.
+    openEditor(chat.id);
+  }
+
+  return (
+    <div className="pane-empty">
+      <h1>No chat selected</h1>
+      <p className="muted">Pick a chat from the sidebar, or start a new one.</p>
+      <button className="inline" onClick={start}>+ New chat</button>
+    </div>
+  );
+}
+```
+
+### File: `client/src/pages/ChatPage.jsx`
+
+```jsx
+import { useEffect, useRef, useState } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { api } from '../api.js';
+import { useChats } from '../chat/ChatsContext.jsx';
+import { useStorage } from '../chat/StorageContext.jsx';
+import { streamMessage } from '../chat/stream.js';
+import ModelPicker from '../chat/ModelPicker.jsx';
+import VideoConfirm from '../chat/VideoConfirm.jsx';
+
+const MODALITIES = ['text', 'image', 'video'];
+const MAX_ATTACH = 6;
+
+// Simple per-browser persistence for the provider-routing toggles.
+const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } };
+
+// Format a per-reply cost (USD) for display; hidden when zero/unknown.
+function fmtCost(c) {
+  const n = Number(c);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 0.01 ? `$${n.toFixed(6)}` : `$${n.toFixed(4)}`;
+}
+
+// Image price (USD per billing unit) → short label; null if unknown. Never
+// exponential — a fixed, readable string.
+function fmtPerImage(p) {
+  const n = Number(p);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 0.01) return `$${n.toFixed(2)}`;
+  if (n >= 0.0001) return `$${n.toFixed(4)}`;
+  return `$${n.toFixed(6)}`;
+}
+
+// Short label for an image billing unit (e.g. "megapixel" → "MP").
+function imgUnit(u) {
+  if (!u) return 'image';
+  const s = String(u).toLowerCase();
+  if (s.includes('megapixel') || s === 'mp') return 'MP';
+  if (s.includes('token')) return 'token';
+  if (s.includes('image')) return 'image';
+  return s;
+}
+
+// A comparable rate label, or null when there's no meaningful per-unit figure
+// (per-token image pricing is metered — a tiny per-token number helps no one).
+function imgRateLabel(cost, unit) {
+  if (String(unit || '').toLowerCase().includes('token')) return null;
+  const label = fmtPerImage(cost);
+  return label ? `from ${label}/${imgUnit(unit)}` : null;
+}
+
+// Per-second video rate (USD) → short label with enough precision for tiny
+// rates; null if unknown.
+function fmtVideo(p) {
+  const n = Number(p);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 0.01) return `$${n.toFixed(2)}`;
+  if (n >= 0.0001) return `$${n.toFixed(4)}`;
+  return `$${n.toPrecision(2)}`;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// One image/video attachment. A cloud file the user deleted on the provider side
+// (or whose provider was disconnected) renders as a placeholder instead of a
+// broken thumbnail — either flagged unavailable on the server (out-of-band
+// detection) or caught here via onError when the media fetch 410s.
+function Attachment({ att }) {
+  const [gone, setGone] = useState(Boolean(att.unavailable));
+  if (gone) {
+    return (
+      <div className="msg-unavailable" title="This file was removed from your cloud storage">
+        ⚠ No longer in your cloud storage
+      </div>
+    );
+  }
+  return att.contentType?.startsWith('video/')
+    ? <video src={att.url} className="msg-video" controls preload="metadata" onError={() => setGone(true)} />
+    : <img src={att.url} alt={att.name || 'attachment'} className="msg-image" onError={() => setGone(true)} />;
+}
+
+export default function ChatPage() {
+  const { chatId } = useParams();
+  const navigate = useNavigate();
+  const { chats, loading, updateChat, deleteChat, refresh, editingChatId, closeEditor } = useChats();
+  const { refresh: refreshStorage } = useStorage();
+
+  const chat = chats.find((c) => c.id === chatId);
+  const editing = chat && editingChatId === chat.id;
+
+  // thread + streaming
+  const [messages, setMessages] = useState([]);
+  const [msgsLoading, setMsgsLoading] = useState(true);
+  const [input, setInput] = useState('');
+  const [streaming, setStreaming] = useState(false);
+  const [streamingText, setStreamingText] = useState('');
+  const [error, setError] = useState(null); // { category, message }
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+
+  // attachments (image input) — array of { file, url, name, type }
+  const [attachments, setAttachments] = useState([]);
+  const [visionSupported, setVisionSupported] = useState(false);
+  const fileInputRef = useRef(null);
+
+  // image / video generation (image- and video-modality chats)
+  const [generating, setGenerating] = useState(false);
+  const [imagePrice, setImagePrice] = useState(null); // USD per image-unit for the model
+  const [imageUnit, setImageUnit] = useState(null);   // billing unit (image | megapixel | …)
+  const [videoPrice, setVideoPrice] = useState(null); // per-second USD for the model
+  const [videoConfirm, setVideoConfirm] = useState(null); // { prompt } awaiting confirmation
+
+  const isImage = chat?.modality === 'image';
+  const isVideo = chat?.modality === 'video';
+  const isText = chat?.modality === 'text';
+  // Video takes a single first-frame image; text/image allow a small set.
+  const attachMax = isVideo ? 1 : MAX_ATTACH;
+
+  // provider routing
+  const [sort, setSort] = useState(() => lsGet('mmchat.sort', 'price'));
+  const [privacy, setPrivacy] = useState(() => lsGet('mmchat.privacy', false));
+  useEffect(() => lsSet('mmchat.sort', sort), [sort]);
+  useEffect(() => lsSet('mmchat.privacy', privacy), [privacy]);
+
+  // editor fields (title/modality/delete — opened from the sidebar ⋯ menu)
+  const [title, setTitle] = useState('');
+  const [modality, setModality] = useState('text');
+  const [saving, setSaving] = useState(false);
+  const [editErr, setEditErr] = useState('');
+
+  const threadRef = useRef(null);
+
+  // Load the persisted thread whenever the routed chat changes.
+  useEffect(() => {
+    if (!chatId) return;
+    let alive = true;
+    setMsgsLoading(true);
+    setError(null);
+    setStreamingText('');
+    api(`/chats/${chatId}/messages`)
+      .then((res) => { if (alive) setMessages(res.messages); })
+      .catch(() => { if (alive) setMessages([]); })
+      .finally(() => { if (alive) setMsgsLoading(false); });
+    return () => { alive = false; };
+  }, [chatId]);
+
+  useEffect(() => {
+    if (chat) { setTitle(chat.title || ''); setModality(chat.modality); setEditErr(''); }
+  }, [chat?.id, editing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Model capabilities: gates the attach control (vision) and surfaces the
+  // per-image price for the image-mode cost note.
+  useEffect(() => {
+    if (!chat?.modelId) { setVisionSupported(false); setImagePrice(null); setImageUnit(null); setVideoPrice(null); return; }
+    let alive = true;
+    api(`/models/capabilities?id=${encodeURIComponent(chat.modelId)}&modality=${encodeURIComponent(chat.modality)}`)
+      .then((r) => { if (alive) { setVisionSupported(!!r.supportsImageInput); setImagePrice(r.imagePrice ?? null); setImageUnit(r.imageUnit ?? null); setVideoPrice(r.videoPrice ?? null); } })
+      .catch(() => { if (alive) { setVisionSupported(false); setImagePrice(null); setImageUnit(null); setVideoPrice(null); } });
+    return () => { alive = false; };
+  }, [chat?.modelId, chat?.modality]);
+
+  // Clear staged attachments when switching chats.
+  useEffect(() => { setAttachments([]); }, [chatId]);
+
+  // Video reconciliation: video jobs are async, so any persisted message still
+  // in 'pending' gets its status re-checked against OpenRouter — once on load and
+  // then on an interval while the tab is open (covers a closed tab / missed
+  // event). Keyed on the set of real (persisted) pending ids so the interval
+  // isn't torn down on every unrelated re-render, and stops once none are left.
+  const pendingVideoKey = messages
+    .filter((m) => m.role === 'assistant' && m.status === 'pending' && m.contentType === 'video' && UUID_RE.test(String(m.id)))
+    .map((m) => m.id)
+    .join(',');
+  // A video job is in flight in THIS chat — a submitted-but-pending one counts,
+  // not just the brief async submit. Gates the composer so a reload or the
+  // minutes-long generation can't fire a second (the backend 409s it either way).
+  const videoPending = pendingVideoKey.length > 0;
+  useEffect(() => {
+    if (!pendingVideoKey) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const res = await api(`/chats/${chatId}/videos/reconcile`, { method: 'POST', body: {} });
+        if (!alive || !res.messages?.length) return;
+        setMessages((m) => m.map((x) => {
+          const upd = res.messages.find((r) => r.id === x.id);
+          return upd ? { ...x, ...upd } : x;
+        }));
+        // A completed job wrote its video to local storage — resync the counter.
+        refreshStorage();
+      } catch { /* transient — try again next tick */ }
+    };
+    tick();
+    const iv = setInterval(tick, 12000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [chatId, pendingVideoKey, refreshStorage]);
+
+  // Keep the thread scrolled to the newest content.
+  useEffect(() => {
+    const el = threadRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, streamingText]);
+
+  if (loading && !chat) return <p className="muted pad">Loading…</p>;
+  if (!chat) {
+    return (
+      <div className="pane-empty">
+        <h1>Chat not found</h1>
+        <p className="muted">It may have been deleted.</p>
+      </div>
+    );
+  }
+
+  const dirty = title !== (chat.title || '') || modality !== chat.modality;
+
+  async function saveEditor() {
+    setEditErr('');
+    setSaving(true);
+    try {
+      await updateChat(chat.id, { title, modality });
+      closeEditor();
+    } catch (err) {
+      setEditErr(err.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeChat() {
+    if (!window.confirm('Delete this chat? This cannot be undone.')) return;
+    try {
+      await deleteChat(chat.id);
+      refreshStorage(); // deleting a chat frees any local media it held
+      navigate('/');
+    } catch (err) {
+      setEditErr(err.message || 'Failed to delete');
+    }
+  }
+
+  async function pickModel(model) {
+    try {
+      await updateChat(chat.id, { modelId: model.id });
+    } catch (err) {
+      setError({ category: 'request', message: err.message || 'Failed to set model' });
+    }
+  }
+
+  function onPickFiles(e) {
+    const chosen = Array.from(e.target.files || []);
+    e.target.value = ''; // let the same file be re-picked later
+    if (!chosen.length) return;
+    const images = chosen.filter((f) => f.type.startsWith('image/'));
+    const room = Math.max(0, attachMax - attachments.length);
+    const next = images.slice(0, room).map((f) => ({ file: f, url: URL.createObjectURL(f), name: f.name, type: f.type }));
+    setAttachments((a) => [...a, ...next]);
+    if (images.length < chosen.length) {
+      setError({ category: 'request', message: 'Only image files can be attached.' });
+    }
+  }
+
+  function removeAttachment(idx) {
+    setAttachments((a) => {
+      const removed = a[idx];
+      if (removed) URL.revokeObjectURL(removed.url);
+      return a.filter((_, i) => i !== idx);
+    });
+  }
+
+  async function send() {
+    if (streaming) return;
+    const content = input.trim();
+    const files = attachments;
+    if (!content && files.length === 0) return;
+    if (chat.modality !== 'text') {
+      setError({ category: 'model', message: 'Only text chats can send messages yet.' });
+      return;
+    }
+    if (!chat.modelId) {
+      setError({ category: 'model', message: 'Choose a model first.' });
+      return;
+    }
+    if (files.length && !visionSupported) {
+      setError({ category: 'model', message: 'This model does not accept image input. Choose a vision-capable model.' });
+      return;
+    }
+    setError(null);
+
+    // Optimistic bubble reuses the local preview URLs (kept valid this session).
+    const previews = files.map((a) => ({ url: a.url, contentType: a.type, name: a.name }));
+    setInput('');
+    setAttachments([]);
+    const tempId = `temp-${Date.now()}`;
+    setMessages((m) => [...m, { id: tempId, role: 'user', content, attachments: previews }]);
+    setStreaming(true);
+    setStreamingText('');
+    let acc = '';
+
+    let body;
+    if (files.length) {
+      body = new FormData();
+      body.append('content', content);
+      body.append('sort', sort);
+      body.append('privacy', String(privacy));
+      for (const a of files) body.append('files', a.file);
+    } else {
+      body = { content, sort, privacy };
+    }
+
+    try {
+      await streamMessage(chat.id, body, {
+        onUser: (e) => setMessages((m) => m.map((x) => (
+          x.id === tempId
+            ? { ...x, id: e.id, attachments: e.attachments?.length ? e.attachments : x.attachments }
+            : x
+        ))),
+        onDelta: (t) => { acc += t; setStreamingText(acc); },
+        onError: (e) => {
+          setError({ category: e.category, message: e.message });
+          if (e.messageId && acc) setMessages((m) => [...m, { id: e.messageId, role: 'assistant', content: acc }]);
+        },
+        onDone: (e) => {
+          if (acc) setMessages((m) => [...m, { id: e.messageId, role: 'assistant', content: acc, costUsd: e.cost }]);
+        },
+      });
+    } catch (err) {
+      setError({ category: err.data?.category || 'request', message: err.message });
+    } finally {
+      setStreaming(false);
+      setStreamingText('');
+      refresh(); // re-sort the sidebar by recency
+      refreshStorage(); // an image attachment may have changed local usage
+    }
+  }
+
+  // Image-modality chats: one-shot generation (no streaming). The submit button
+  // is disabled while in flight, and each submit carries an idempotency key so a
+  // reload-refire against the same pending message is refused by the backend.
+  async function generateImage() {
+    if (generating) return;
+    const prompt = input.trim();
+    if (!prompt) return;
+    if (!chat.modelId) {
+      setError({ category: 'model', message: 'Choose an image model first.' });
+      return;
+    }
+    const files = attachments;
+    if (files.length && !visionSupported) {
+      setError({ category: 'model', message: 'This image model does not accept a reference image. Choose one that supports image input.' });
+      return;
+    }
+    setError(null);
+    setInput('');
+    setAttachments([]);
+    // Optimistic bubble reuses the local preview URLs (kept valid this session).
+    const previews = files.map((a) => ({ url: a.url, contentType: a.type, name: a.name }));
+    const key = crypto.randomUUID();
+    const tempUser = `temp-${Date.now()}`;
+    const tempAsst = `pending-${Date.now()}`;
+    setMessages((m) => [
+      ...m,
+      { id: tempUser, role: 'user', content: prompt, attachments: previews },
+      { id: tempAsst, role: 'assistant', content: null, status: 'pending', contentType: 'image' },
+    ]);
+    setGenerating(true);
+
+    let body;
+    if (files.length) {
+      body = new FormData();
+      body.append('prompt', prompt);
+      body.append('idempotencyKey', key);
+      for (const a of files) body.append('files', a.file);
+    } else {
+      body = { prompt, idempotencyKey: key };
+    }
+
+    try {
+      const res = await api(`/chats/${chat.id}/images`, { method: 'POST', body });
+      setMessages((m) => m
+        .map((x) => (x.id === tempUser
+          ? { ...x, id: res.userMessageId || x.id, attachments: res.userAttachments?.length ? res.userAttachments : x.attachments }
+          : x))
+        .map((x) => (x.id === tempAsst ? res.message : x)));
+    } catch (err) {
+      // A 413 comes from the proxy (upload larger than it allows), not the model
+      // — don't mislabel it "try a different model". Fall back to 'request', not
+      // 'model', for any error the API didn't categorise itself.
+      const message = err.status === 413
+        ? 'That image is too large to upload. Try a smaller file.'
+        : err.message;
+      setError({ category: err.status === 413 ? 'request' : (err.data?.category || 'request'), message });
+      setMessages((m) => m.filter((x) => x.id !== tempAsst)); // drop the pending placeholder
+    } finally {
+      setGenerating(false);
+      refresh();
+      refreshStorage(); // a generated image (and any reference upload) touched local storage
+    }
+  }
+
+  // Video-modality chats: async generation, gated behind a confirmation dialog
+  // (real spend). requestVideo opens the dialog; confirmVideo actually submits.
+  function requestVideo() {
+    if (generating || videoPending) return;
+    const prompt = input.trim();
+    if (!prompt) return;
+    if (!chat.modelId) {
+      setError({ category: 'model', message: 'Choose a video model first.' });
+      return;
+    }
+    if (attachments.length && !visionSupported) {
+      setError({ category: 'model', message: 'This video model does not accept a first-frame image. Choose one that supports image-to-video.' });
+      return;
+    }
+    setError(null);
+    setVideoConfirm({ prompt });
+  }
+
+  async function confirmVideo() {
+    const prompt = videoConfirm?.prompt?.trim();
+    setVideoConfirm(null);
+    if (!prompt) return;
+    const files = attachments; // the optional first-frame image
+    setInput('');
+    setAttachments([]);
+    const previews = files.map((a) => ({ url: a.url, contentType: a.type, name: a.name }));
+    const key = crypto.randomUUID();
+    const tempUser = `temp-${Date.now()}`;
+    const tempAsst = `pending-${Date.now()}`;
+    setMessages((m) => [
+      ...m,
+      { id: tempUser, role: 'user', content: prompt, attachments: previews },
+      { id: tempAsst, role: 'assistant', content: null, status: 'pending', contentType: 'video', jobStatus: 'submitting' },
+    ]);
+    setGenerating(true);
+
+    let body;
+    if (files.length) {
+      body = new FormData();
+      body.append('prompt', prompt);
+      body.append('idempotencyKey', key);
+      for (const a of files) body.append('files', a.file);
+    } else {
+      body = { prompt, idempotencyKey: key };
+    }
+
+    try {
+      const res = await api(`/chats/${chat.id}/videos`, { method: 'POST', body });
+      setMessages((m) => m
+        .map((x) => (x.id === tempUser
+          ? { ...x, id: res.userMessageId || x.id, attachments: res.userAttachments?.length ? res.userAttachments : x.attachments }
+          : x))
+        .map((x) => (x.id === tempAsst ? res.message : x)));
+    } catch (err) {
+      const message = err.status === 413
+        ? 'That image is too large to upload. Try a smaller file.'
+        : err.message;
+      setError({ category: err.status === 413 ? 'request' : (err.data?.category || 'request'), message });
+      setMessages((m) => m.filter((x) => x.id !== tempAsst)); // drop the pending placeholder
+    } finally {
+      setGenerating(false);
+      refresh();
+      refreshStorage(); // a first-frame upload may have changed local usage
+    }
+  }
+
+  const submit = () => (isImage ? generateImage() : isVideo ? requestVideo() : send());
+
+  function onComposerKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+  }
+
+  const keyProblem = error && (error.category === 'key' || error.category === 'credits');
+  const tokenMetered = isImage && String(imageUnit || '').toLowerCase().includes('token');
+  const imgUnitPhrase = tokenMetered ? 'per token (metered)' : `per ${imgUnit(imageUnit)}`;
+  // The model is fixed once a chat has a thread — a conversation/generation
+  // history belongs to the model that produced it. Start a new chat to switch.
+  const modelLocked = messages.length > 0;
+
+  return (
+    <div className="chat-pane">
+      <div className="chat-header">
+        <h1 className="chat-heading">{chat.title || 'Untitled chat'}</h1>
+        <span className="chat-modality">{chat.modality}</span>
+      </div>
+
+      {/* model + provider-routing bar — hidden while the name/type editor is
+          open, so a new chat's info is set up before a model is chosen */}
+      {!editing && (<>
+      <div className="model-bar">
+        <button
+          className="model-select"
+          onClick={() => setPickerOpen(true)}
+          disabled={modelLocked}
+          title={modelLocked
+            ? 'The model is fixed once a chat has messages. Start a new chat to use a different model.'
+            : 'Choose a model'}
+        >
+          {chat.modelId ? <span className="model-current">{chat.modelId}</span> : 'Choose a model'}
+          {modelLocked && <span className="model-lock" aria-hidden="true"> 🔒</span>}
+        </button>
+        {(isImage || isVideo) && chat.modelId && (
+          <div className="cost-note-compact" tabIndex={0} role="note" aria-label="Billing and pricing note">
+            <span className="cnc-summary">
+              <strong className="cnc-notice">USER NOTICE</strong>
+              ⚠ Variable Billing Models · hover for details
+            </span>
+            <div className="cnc-full small">
+              {isImage ? (
+                <>Image generation is billed <strong>{imgUnitPhrase}</strong>
+                  {imgRateLabel(imagePrice, imageUnit) ? <> — <strong>{imgRateLabel(imagePrice, imageUnit)}</strong> for this model</> : null}.
+                  Every “Generate” is a separate charge (it doesn’t resend the chat), so costs add up quickly. Each result shows its exact cost below it.</>
+              ) : (
+                <>Video generation is <strong>asynchronous and can be expensive</strong>
+                  {fmtVideo(videoPrice) ? <> — from <strong>{fmtVideo(videoPrice)}/second</strong> of output (higher resolutions cost more), so a few-second clip is several times that</> : null}.
+                  Each “Generate” is a <strong>real charge</strong> on your OpenRouter key. You’ll confirm before it runs; jobs take a few minutes and finish on their own. Each result shows its exact cost below it.</>
+              )}
+              <div className="cnc-disclaimer">
+                Prices are estimates and <strong>may be inaccurate</strong> — verify on{' '}
+                <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer">openrouter.ai</a> before relying on them.
+              </div>
+            </div>
+          </div>
+        )}
+        {isText && (
+          <div className="provider-controls">
+            <span className="ctrl-label">Route to</span>
+            <div className="seg" role="group" aria-label="Provider routing preference">
+              <button className={sort === 'price' ? 'on' : ''} onClick={() => setSort('price')}>Cheapest</button>
+              <button className={sort === 'speed' ? 'on' : ''} onClick={() => setSort('speed')}>Fastest</button>
+            </div>
+            <label className="check privacy">
+              <input type="checkbox" checked={privacy} onChange={(e) => setPrivacy(e.target.checked)} />
+              No-logging providers
+            </label>
+            <button className="info-btn" title="What do these do?" aria-label="Explain routing" onClick={() => setShowHelp((s) => !s)}>ⓘ</button>
+          </div>
+        )}
+      </div>
+      {showHelp && isText && (
+        <p className="routing-help muted small">
+          These are <strong>provider-routing</strong> preferences for models that
+          several providers serve. <strong>Cheapest</strong> vs <strong>Fastest</strong> picks
+          the lowest-cost vs highest-throughput provider; <strong>No-logging providers</strong> limits
+          routing to providers that won't log or train on your prompts. They affect cost, speed, and
+          privacy — <em>not</em> the reply itself — and do nothing for a model with only one provider.
+          Each reply's cost is shown beneath it.
+        </p>
+      )}
+      </>)}
+
+      {editing && (
+        <div className="chat-settings card">
+          <div className="card-head">
+            <h2>Chat settings</h2>
+            <button className="close-x" title="Close" aria-label="Close" onClick={closeEditor}>✕</button>
+          </div>
+          <label>
+            Title
+            <input type="text" value={title} placeholder="Untitled chat" autoFocus
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && dirty && saveEditor()} />
+          </label>
+          <label>
+            Type {modelLocked && <span className="muted small">— locked once the chat has messages</span>}
+            <select value={modality} disabled={modelLocked}
+              title={modelLocked ? 'The chat type is fixed once the chat has messages.' : undefined}
+              onChange={(e) => setModality(e.target.value)}>
+              {MODALITIES.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </label>
+          <div className="row-btns">
+            <button onClick={saveEditor} disabled={!dirty || saving}>{saving ? 'Saving…' : 'Save changes'}</button>
+            <button className="danger" onClick={removeChat}>Delete chat</button>
+          </div>
+          {editErr && <p className="error">{editErr}</p>}
+        </div>
+      )}
+
+      {/* thread */}
+      <div className="thread" ref={threadRef}>
+        {msgsLoading ? (
+          <p className="muted pad">Loading…</p>
+        ) : messages.length === 0 && !streaming ? (
+          <div className="thread-empty">
+            <p className="muted">No messages yet.</p>
+            <p className="muted small">
+              {isImage
+                ? 'Pick an image model and describe what to generate below.'
+                : isVideo
+                  ? 'Pick a video model and describe the video to generate below.'
+                  : 'Pick a model and send a message below.'}
+            </p>
+          </div>
+        ) : (
+          <div className="msgs">
+            {messages.map((m) => (
+              <div key={m.id} className={`msg ${m.role}`}>
+                <div className="msg-role">{m.role}</div>
+                {m.attachments?.length > 0 && (
+                  <div className="msg-attachments">
+                    {m.attachments.map((att) => (
+                      <Attachment key={att.id || att.url} att={att} />
+                    ))}
+                  </div>
+                )}
+                {m.content && <div className="msg-content">{m.content}</div>}
+                {m.status === 'pending' && (
+                  <div className="msg-content muted">
+                    {m.contentType === 'video' ? (
+                      <>
+                        Generating video{m.jobStatus && m.jobStatus !== 'pending' ? ` (${m.jobStatus})` : ''}…{' '}
+                        <span className="caret">▋</span>
+                        <div className="small">This can take several minutes. You can leave this page — it’ll finish on its own.</div>
+                      </>
+                    ) : (
+                      <>Generating image… <span className="caret">▋</span></>
+                    )}
+                  </div>
+                )}
+                {m.status === 'failed' && (
+                  <div className="msg-content error-inline">⚠ {m.error || 'Generation failed.'}</div>
+                )}
+                {m.role === 'assistant' && fmtCost(m.costUsd) && (
+                  <div className="msg-cost muted small" title="Approximate cost billed to your OpenRouter key">
+                    {fmtCost(m.costUsd)}
+                  </div>
+                )}
+              </div>
+            ))}
+            {streaming && (
+              <div className="msg assistant">
+                <div className="msg-role">assistant</div>
+                <div className="msg-content">{streamingText}<span className="caret">▋</span></div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <div className={`send-error ${keyProblem ? 'act' : 'model'}`}>
+          <strong>{keyProblem ? 'Your key / credits: ' : error.category === 'model' ? 'Model / provider: ' : 'Error: '}</strong>
+          {error.message}
+          {keyProblem && <> — <Link to="/settings">open Settings</Link> to fix your key.</>}
+          {error.category === 'model' && <> — try a different model.</>}
+        </div>
+      )}
+
+      {/* composer */}
+      <div className="composer-wrap">
+        {(isText || isImage || isVideo) && attachments.length > 0 && (
+          <div className="attach-chips">
+            {attachments.map((a, i) => (
+              <div key={a.url} className="chip">
+                <img src={a.url} alt="" className="chip-thumb" />
+                <span className="chip-name">{a.name}</span>
+                <button className="chip-x" aria-label="Remove attachment" onClick={() => removeAttachment(i)}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="composer">
+          {(isText || isImage || isVideo) && (
+            <>
+              <input ref={fileInputRef} type="file" accept="image/*" multiple={!isVideo} hidden onChange={onPickFiles} />
+              <button
+                className="attach-btn"
+                title={visionSupported
+                  ? (isVideo ? 'Attach a first-frame image' : isImage ? 'Attach reference image(s)' : 'Attach image(s)')
+                  : (isVideo ? 'This video model does not accept a first-frame image' : isImage ? 'This image model does not accept a reference image' : 'This model does not accept image input')}
+                aria-label="Attach image"
+                disabled={!visionSupported || streaming || generating || videoPending || attachments.length >= attachMax}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                📎
+              </button>
+            </>
+          )}
+          <textarea
+            rows={2}
+            placeholder={
+              !chat.modelId
+                ? 'Choose a model first…'
+                : isImage
+                  ? 'Describe the image to generate…  (Enter to generate)'
+                  : isVideo
+                    ? 'Describe the video to generate…  (Enter to continue)'
+                    : 'Type a message…  (Enter to send, Shift+Enter for newline)'
+            }
+            value={input}
+            disabled={streaming || generating}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onComposerKey}
+          />
+          {isImage ? (
+            <button onClick={generateImage} disabled={generating || !input.trim()}>
+              {generating ? 'Generating…' : 'Generate image'}
+            </button>
+          ) : isVideo ? (
+            <button onClick={requestVideo} disabled={generating || videoPending || !input.trim()}>
+              {generating ? 'Submitting…' : videoPending ? 'Generating…' : 'Generate video'}
+            </button>
+          ) : (
+            <button onClick={send} disabled={streaming || (!input.trim() && attachments.length === 0)}>
+              {streaming ? 'Sending…' : 'Send'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {pickerOpen && (
+        <ModelPicker
+          modality={chat.modality}
+          currentModelId={chat.modelId}
+          onSelect={pickModel}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
+
+      {videoConfirm && (
+        <VideoConfirm
+          modelId={chat.modelId}
+          perSecond={videoPrice}
+          onConfirm={confirmVideo}
+          onCancel={() => setVideoConfirm(null)}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+### File: `client/src/pages/LoginPage.jsx`
+
+```jsx
+import { useState } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { api } from '../api.js';
+import { useAuth } from '../auth/AuthContext.jsx';
+import EnrollTotp from '../auth/EnrollTotp.jsx';
+
+export default function LoginPage() {
+  const navigate = useNavigate();
+  const { setUser } = useAuth();
+
+  const [step, setStep] = useState('credentials'); // credentials | totp | enroll
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [rememberDevice, setRememberDevice] = useState(true);
+  const [enrollment, setEnrollment] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  function done(user) {
+    setUser(user);
+    navigate('/', { replace: true });
+  }
+
+  async function submitCredentials(e) {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const res = await api('/auth/login', { method: 'POST', body: { email, password } });
+      if (res.totpRequired) {
+        setStep('totp');
+      } else if (res.enrollmentIncomplete) {
+        // Recovery: password ok but TOTP was reset — re-enroll a fresh app.
+        const { enrollment } = await api('/auth/register/enroll', { method: 'POST' });
+        setEnrollment(enrollment);
+        setStep('enroll');
+      } else if (res.user) {
+        done(res.user); // trusted device — TOTP skipped
+      }
+    } catch (err) {
+      setError(err.message || 'Login failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitTotp(e) {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const { user } = await api('/auth/login/totp', {
+        method: 'POST',
+        body: { code, rememberDevice },
+      });
+      done(user);
+    } catch (err) {
+      setError(err.message || 'Verification failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (step === 'enroll' && enrollment) {
+    return (
+      <main className="auth">
+        <EnrollTotp enrollment={enrollment} onEnrolled={done} />
+      </main>
+    );
+  }
+
+  if (step === 'totp') {
+    return (
+      <main className="auth">
+        <form className="card" onSubmit={submitTotp}>
+          <h1>Two-factor authentication</h1>
+          <p className="muted">Enter the 6-digit code from your authenticator app, or a backup code.</p>
+          <label>
+            Code
+            <input
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="123456"
+              autoFocus
+              required
+            />
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={rememberDevice} onChange={(e) => setRememberDevice(e.target.checked)} />
+            Trust this device for 30 days
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button type="submit" disabled={busy}>{busy ? 'Verifying…' : 'Verify'}</button>
+        </form>
+      </main>
+    );
+  }
+
+  return (
+    <main className="auth">
+      <form className="card" onSubmit={submitCredentials}>
+        <h1>Log in</h1>
+        <label>
+          Email
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
+        </label>
+        <label>
+          Password
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        </label>
+        {error && <p className="error">{error}</p>}
+        <button type="submit" disabled={busy}>{busy ? 'Logging in…' : 'Log in'}</button>
+        <p className="muted small">Have an invite? <Link to="/register">Create an account</Link></p>
+      </form>
+    </main>
+  );
+}
+```
+
+### File: `client/src/pages/RegisterPage.jsx`
+
+```jsx
+import { useState } from 'react';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { api } from '../api.js';
+import { useAuth } from '../auth/AuthContext.jsx';
+import EnrollTotp from '../auth/EnrollTotp.jsx';
+
+export default function RegisterPage() {
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const { setUser } = useAuth();
+
+  const [token, setToken] = useState(params.get('token') || '');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [enrollment, setEnrollment] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function start(e) {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const { enrollment } = await api('/auth/register/start', {
+        method: 'POST',
+        body: { token, email, password },
+      });
+      setEnrollment(enrollment);
+    } catch (err) {
+      setError(err.message || 'Registration failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function finished(user) {
+    setUser(user);
+    navigate('/', { replace: true });
+  }
+
+  if (enrollment) {
+    return (
+      <main className="auth">
+        <EnrollTotp enrollment={enrollment} onEnrolled={finished} />
+      </main>
+    );
+  }
+
+  return (
+    <main className="auth">
+      <form className="card" onSubmit={start}>
+        <h1>Create your account</h1>
+        <p className="muted">You need a one-time invite token to sign up.</p>
+        <label>
+          Invite token
+          <input value={token} onChange={(e) => setToken(e.target.value)} required />
+        </label>
+        <label>
+          Email
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        </label>
+        <label>
+          Password <span className="muted small">(min 8 characters)</span>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
+        </label>
+        {error && <p className="error">{error}</p>}
+        <button type="submit" disabled={busy}>{busy ? 'Creating…' : 'Continue'}</button>
+        <p className="muted small">Already have an account? <Link to="/login">Log in</Link></p>
+      </form>
+    </main>
+  );
+}
+```
+
+### File: `client/src/pages/SettingsPage.jsx`
+
+```jsx
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { api } from '../api.js';
+import { useAuth } from '../auth/AuthContext.jsx';
+import { useStorage, fmtGb } from '../chat/StorageContext.jsx';
+
+// Contact address for the "Contact me" button. Sourced from an env var (not
+// hardcoded) so the deployment domain stays out of the committed repo; the
+// section only renders when it's set. See client/.env.example.
+const CONTACT_EMAIL = import.meta.env.VITE_CONTACT_EMAIL || '';
+
+// A collapsible settings section: title bar with a ✕ to close it, and a click
+// anywhere on the bar to toggle it back open.
+function Section({ title, children }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <section className="card">
+      <div className="card-head clickable" onClick={() => setOpen((o) => !o)}>
+        <h2>{title}</h2>
+        <button
+          className="close-x"
+          title={open ? 'Close' : 'Open'}
+          aria-label={open ? 'Close section' : 'Open section'}
+          onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        >
+          {open ? '✕' : '▾'}
+        </button>
+      </div>
+      {open && <div className="card-body">{children}</div>}
+    </section>
+  );
+}
+
+// Settings: the user's OpenRouter API key (BYOK) and, for admins, invite-token
+// generation. The full key is never returned by the server after saving — the
+// UI only ever shows the last 4 characters.
+export default function SettingsPage() {
+  const { user, refresh, setUser } = useAuth();
+  const navigate = useNavigate();
+
+  const [meta, setMeta] = useState(null); // { hasKey, suffix?, label?, createdAt? }
+  const [keyInput, setKeyInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [note, setNote] = useState('');
+
+  async function loadMeta() {
+    try {
+      setMeta(await api('/keys'));
+    } catch {
+      setMeta({ hasKey: false });
+    }
+  }
+
+  useEffect(() => { loadMeta(); }, []);
+
+  async function saveKey() {
+    setError('');
+    setNote('');
+    setBusy(true);
+    try {
+      const res = await api('/keys', { method: 'PUT', body: { key: keyInput } });
+      setMeta(res);
+      setKeyInput('');
+      setNote('API key saved. Only the last 4 characters are shown from now on.');
+    } catch (err) {
+      setError(err.message || 'Failed to save key');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeKey() {
+    if (!window.confirm('Remove your saved OpenRouter API key?')) return;
+    setError('');
+    setNote('');
+    setBusy(true);
+    try {
+      setMeta(await api('/keys', { method: 'DELETE' }));
+      setNote('API key removed.');
+    } catch (err) {
+      setError(err.message || 'Failed to remove key');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings">
+      <div className="settings-head">
+        <h1>Settings</h1>
+        <button className="link-btn" onClick={() => navigate('/')}>✕ Close</button>
+      </div>
+
+      <Section title="Profile">
+        <ProfileSection user={user} onEmailChange={refresh} />
+      </Section>
+
+      <Section title="OpenRouter API key">
+        <p className="muted small">
+          Your key is encrypted at rest and used only to make requests on your
+          behalf. It's never shown again after you save it.
+        </p>
+
+        {meta?.hasKey ? (
+          <p className="key-status">
+            Key on file: <code className="secret inline">••••••••••••{meta.suffix}</code>
+            {meta.label ? <span className="muted small"> · {meta.label}</span> : null}
+          </p>
+        ) : (
+          <p className="muted small">No key saved yet.</p>
+        )}
+
+        <label>
+          {meta?.hasKey ? 'Replace key' : 'Paste your key'}
+          <input
+            type="password"
+            value={keyInput}
+            placeholder="sk-or-v1-…"
+            autoComplete="off"
+            onChange={(e) => setKeyInput(e.target.value)}
+          />
+        </label>
+
+        <div className="row-btns">
+          <button onClick={saveKey} disabled={busy || !keyInput.trim()}>
+            {busy ? 'Saving…' : meta?.hasKey ? 'Replace key' : 'Save key'}
+          </button>
+          {meta?.hasKey && (
+            <button className="danger" onClick={removeKey} disabled={busy}>Remove key</button>
+          )}
+        </div>
+        {error && <p className="error">{error}</p>}
+        {note && <p className="muted small">{note}</p>}
+
+        <Credits hasKey={meta?.hasKey} />
+      </Section>
+
+      <Section title="Spend">
+        <SpendDashboard />
+      </Section>
+
+      <Section title="Local storage">
+        <StorageUsage />
+      </Section>
+
+      <Section title="Cloud storage">
+        <CloudStorage />
+      </Section>
+
+      {user.isAdmin && (
+        <Section title="Admin — generate an invite">
+          <AdminInvites />
+        </Section>
+      )}
+
+      <Section title="Delete account">
+        <DeleteAccount
+          onDeleted={() => {
+            setUser(null);
+            navigate('/login', { replace: true });
+          }}
+        />
+      </Section>
+
+      {CONTACT_EMAIL && (
+        <Section title="Contact">
+          <p className="muted small">
+            Questions, a problem to report, or need help with your account? Click to email{' '}
+            <code className="secret inline">{CONTACT_EMAIL}</code>.
+          </p>
+          <div className="row-btns">
+            <button onClick={() => { window.location.href = `mailto:${CONTACT_EMAIL}`; }}>
+              Contact me
+            </button>
+          </div>
+        </Section>
+      )}
+    </div>
+  );
+}
+
+// Currency: costs are often fractions of a cent, so show enough precision to be
+// meaningful without a wall of zeros. Under a cent → 4 dp; otherwise 2 dp.
+function fmtUsd(n) {
+  const v = Number(n) || 0;
+  if (v === 0) return '$0.00';
+  if (v < 0.01) return `$${v.toFixed(4)}`;
+  return `$${v.toFixed(2)}`;
+}
+
+// Profile: shows the current email read-only, with an Edit button that opens a
+// modal to change email OR password. Nothing sensitive sits inline on the page.
+function ProfileSection({ user, onEmailChange }) {
+  const [editing, setEditing] = useState(false);
+  const [note, setNote] = useState('');
+
+  return (
+    <>
+      <p className="key-status">
+        Signed in as <code className="secret inline">{user.email}</code>
+        {user.isAdmin ? <span className="muted small"> · admin</span> : null}
+      </p>
+      <div className="row-btns">
+        <button onClick={() => { setNote(''); setEditing(true); }}>Edit</button>
+      </div>
+      {note && <p className="muted small">{note}</p>}
+      {editing && (
+        <ProfileEditModal
+          user={user}
+          onClose={() => setEditing(false)}
+          onSaved={(msg, emailChanged) => {
+            setNote(msg);
+            setEditing(false);
+            if (emailChanged) onEmailChange();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// Edit-profile dialog. Two modes — change email or change password — behind a
+// toggle. The current password gates either change (it's sensitive). A password
+// change also requires re-typing the new one (catches typos) and, server-side,
+// revokes trusted devices so TOTP is re-required on next login everywhere.
+function ProfileEditModal({ user, onClose, onSaved }) {
+  const [mode, setMode] = useState('email'); // 'email' | 'password'
+  const [email, setEmail] = useState(user.email);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const emailChanged = email.trim().toLowerCase() !== user.email;
+
+  function switchMode(m) {
+    setMode(m);
+    setError('');
+  }
+
+  async function submit() {
+    setError('');
+    if (mode === 'email') {
+      if (!emailChanged) return setError('Enter a different email address.');
+    } else {
+      if (!newPassword) return setError('Enter a new password.');
+      if (newPassword.length < 8) return setError('Password must be at least 8 characters.');
+      if (newPassword !== confirmPassword) return setError('The new passwords don’t match.');
+    }
+    if (!currentPassword) return setError('Enter your current password to confirm.');
+
+    setBusy(true);
+    try {
+      const body = mode === 'email'
+        ? { currentPassword, email: email.trim() }
+        : { currentPassword, newPassword };
+      const res = await api('/account/profile', { method: 'PATCH', body });
+      const msg = res.emailChanged
+        ? 'Email updated.'
+        : res.passwordChanged
+          ? 'Password changed — other devices will need TOTP again on next login.'
+          : 'Saved.';
+      onSaved(msg, Boolean(res.emailChanged));
+    } catch (err) {
+      setError(err.message || 'Failed to update profile');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal confirm" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2>Edit profile</h2>
+          <button className="close-x" title="Close" aria-label="Close" onClick={onClose}>✕</button>
+        </div>
+        <div className="confirm-body">
+          <div className="seg" role="tablist">
+            <button className={mode === 'email' ? 'on' : ''} onClick={() => switchMode('email')}>
+              Change email
+            </button>
+            <button className={mode === 'password' ? 'on' : ''} onClick={() => switchMode('password')}>
+              Change password
+            </button>
+          </div>
+
+          {mode === 'email' ? (
+            <label>
+              New email
+              <input
+                type="email"
+                value={email}
+                autoComplete="username"
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
+          ) : (
+            <>
+              <label>
+                New password
+                <input
+                  type="password"
+                  value={newPassword}
+                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+              </label>
+              <label>
+                Confirm new password
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  placeholder="Re-enter the new password"
+                  autoComplete="new-password"
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                />
+              </label>
+            </>
+          )}
+
+          <label>
+            Current password <span className="muted small">(required)</span>
+            <input
+              type="password"
+              value={currentPassword}
+              placeholder="Your current password"
+              autoComplete="current-password"
+              onChange={(e) => setCurrentPassword(e.target.value)}
+            />
+          </label>
+          {error && <p className="error">{error}</p>}
+        </div>
+        <div className="row-btns">
+          <button onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
+          <button className="ghost" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Live credit/limit info for the user's OpenRouter key (GET /api/keys/credits →
+// OpenRouter GET /auth/key). On demand so we don't hit OpenRouter on every
+// settings load.
+function Credits({ hasKey }) {
+  const [info, setInfo] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function load() {
+    setError('');
+    setBusy(true);
+    try {
+      setInfo(await api('/keys/credits'));
+    } catch (err) {
+      setError(err.message || 'Could not read credits');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!hasKey) return null;
+
+  return (
+    <div className="credits">
+      <div className="row-btns">
+        <button onClick={load} disabled={busy}>{busy ? 'Checking…' : 'View credits'}</button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {info && (
+        <ul className="credits-list">
+          <li>
+            <span className="muted small">Used</span>
+            <strong>{fmtUsd(info.usage)}</strong>
+          </li>
+          <li>
+            <span className="muted small">Limit</span>
+            <strong>{info.limit == null ? 'unlimited' : fmtUsd(info.limit)}</strong>
+          </li>
+          <li>
+            <span className="muted small">Remaining</span>
+            <strong>{info.remaining == null ? '—' : fmtUsd(info.remaining)}</strong>
+          </li>
+          {info.isFreeTier && <li><span className="badge">free tier</span></li>}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Spend dashboard: total (all-time + this month) plus by-model and by-chat
+// breakdowns over the stored messages.cost_usd. Self-computed estimate — the
+// same figure the chat UI shows per message, aggregated.
+function SpendDashboard() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api('/account/spend').then(setData).catch((err) => setError(err.message || 'Failed to load spend'));
+  }, []);
+
+  if (error) return <p className="error">{error}</p>;
+  if (!data) return <p className="muted small">Loading…</p>;
+
+  if (!data.count) {
+    return <p className="muted small">No spend recorded yet. Costs appear here as you send messages and generate media.</p>;
+  }
+
+  return (
+    <>
+      <div className="spend-totals">
+        <div className="spend-total">
+          <span className="muted small">All-time</span>
+          <strong>{fmtUsd(data.allTime)}</strong>
+        </div>
+        <div className="spend-total">
+          <span className="muted small">This month</span>
+          <strong>{fmtUsd(data.thisMonth)}</strong>
+        </div>
+      </div>
+      <p className="muted small">
+        Only counts messages in chats you still have — spend from deleted chats isn’t
+        included, so this can read well below your real OpenRouter total. Self-computed from
+        each response’s reported usage (a close estimate, not your exact bill); verify on
+        openrouter.ai.
+      </p>
+
+      <h3>By model</h3>
+      <SpendTable
+        rows={data.byModel}
+        label={(r) => r.model}
+        keyOf={(r) => r.model}
+      />
+
+      <h3>By chat</h3>
+      <SpendTable
+        rows={data.byChat}
+        label={(r) => `${r.title} · ${r.modality}`}
+        keyOf={(r) => r.id}
+      />
+    </>
+  );
+}
+
+function SpendTable({ rows, label, keyOf }) {
+  return (
+    <table className="spend-table">
+      <tbody>
+        {rows.map((r) => (
+          <tr key={keyOf(r)}>
+            <td className="spend-name" title={label(r)}>{label(r)}</td>
+            <td className="spend-count muted small">{r.count}×</td>
+            <td className="spend-amt">{fmtUsd(r.total)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// Delete account — irreversible. Two gates: type DELETE, and re-enter the
+// password (the server verifies it). Local media + all DB records go; files
+// already in the user's own cloud folder are left untouched.
+function DeleteAccount({ onDeleted }) {
+  const [confirmText, setConfirmText] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const ready = confirmText.trim().toUpperCase() === 'DELETE' && password;
+
+  async function remove() {
+    if (!ready) return;
+    setError('');
+    setBusy(true);
+    try {
+      await api('/account', { method: 'DELETE', body: { currentPassword: password } });
+      onDeleted();
+    } catch (err) {
+      setError(err.message || 'Failed to delete account');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <p className="muted small">
+        Permanently deletes your account, chats, messages, uploaded and generated media on
+        this server, your API key, and cloud-storage links. This can’t be undone. Files already
+        uploaded to your own Google Drive folder are left untouched — remove those in Drive yourself.
+      </p>
+      <label>
+        Type <code>DELETE</code> to confirm
+        <input
+          type="text"
+          value={confirmText}
+          placeholder="DELETE"
+          autoComplete="off"
+          onChange={(e) => setConfirmText(e.target.value)}
+        />
+      </label>
+      <label>
+        Your password
+        <input
+          type="password"
+          value={password}
+          placeholder="Your current password"
+          autoComplete="current-password"
+          onChange={(e) => setPassword(e.target.value)}
+        />
+      </label>
+      <div className="row-btns">
+        <button className="danger-solid" onClick={remove} disabled={busy || !ready}>
+          {busy ? 'Deleting…' : 'Delete my account'}
+        </button>
+      </div>
+      {error && <p className="error">{error}</p>}
+    </>
+  );
+}
+
+// Local storage used vs. the 5 GB cap. Reads the shared storage status (and
+// refreshes it on open so the figure is current). Generated media and uploaded
+// input both count; text messages don't.
+function StorageUsage() {
+  const { status, refresh } = useStorage();
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  if (!status) return <p className="muted small">Loading…</p>;
+
+  const pct = status.capBytes ? Math.min(100, (status.usedBytes / status.capBytes) * 100) : 0;
+  const fillClass = status.atCap ? 'full' : status.atNotice ? 'warn' : '';
+
+  return (
+    <>
+      <p className="key-status">
+        {fmtGb(status.usedBytes)} of {fmtGb(status.capBytes)} used
+        <span className="muted small"> · {pct.toFixed(0)}%</span>
+      </p>
+      <div className="storage-meter">
+        <div className="storage-bar">
+          <div className={`storage-bar-fill ${fillClass}`} style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+      {status.atCap ? (
+        <p className="error">
+          You've reached the {fmtGb(status.capBytes)} limit. New uploads and image/video
+          generations are blocked until you delete some media. Text and existing chats still work.
+        </p>
+      ) : status.atNotice ? (
+        <p className="muted small">
+          You're past {fmtGb(status.noticeBytes)} — approaching the {fmtGb(status.capBytes)} limit.
+        </p>
+      ) : (
+        <p className="muted small">
+          Generated media and uploaded images count toward this limit; text messages don't.
+          Deleting a chat frees the media it held.
+        </p>
+      )}
+    </>
+  );
+}
+
+// Cloud storage linking (Step 8: Google Drive). When connected, generated media
+// uploads to the user's own Drive folder instead of local disk and doesn't count
+// against the 5 GB cap. "Verify cloud files" reconciles our references against
+// Drive after the user deletes files there directly.
+function CloudStorage() {
+  const [status, setStatus] = useState(null); // { google_drive: {...} }
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+
+  async function load() {
+    try { setStatus(await api('/storage/providers')); }
+    catch { setStatus({ google_drive: { configured: false, connected: false } }); }
+  }
+
+  useEffect(() => {
+    load();
+    // Surface the outcome of the OAuth round-trip (?cloud=…&connected / &error).
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('cloud') === 'google_drive') {
+      if (q.get('connected')) setNote('Google Drive connected. New media will upload there.');
+      else if (q.get('error')) setError(`Couldn't connect Google Drive (${q.get('error')}).`);
+      window.history.replaceState({}, '', '/settings');
+    }
+  }, []);
+
+  const gd = status?.google_drive;
+
+  async function disconnect() {
+    if (!window.confirm('Disconnect Google Drive? Files already in your Drive stay there, but they’ll no longer display in the app, and new media will save locally.')) return;
+    setBusy(true); setError(''); setNote('');
+    try { await api('/storage/google', { method: 'DELETE' }); setNote('Google Drive disconnected.'); await load(); }
+    catch (err) { setError(err.message || 'Failed to disconnect'); }
+    finally { setBusy(false); }
+  }
+
+  async function verify() {
+    setBusy(true); setError(''); setNote('');
+    try {
+      const r = await api('/storage/verify', { method: 'POST', body: {} });
+      setNote(`Checked ${r.checked} file(s); flagged ${r.flagged} no longer in your Drive.`);
+    } catch (err) { setError(err.message || 'Verify failed'); }
+    finally { setBusy(false); }
+  }
+
+  if (!status) return <p className="muted small">Loading…</p>;
+
+  return (
+    <>
+      <p className="key-status">
+        <strong>Google Drive</strong>
+        {gd?.connected ? <span className="muted small"> · connected</span> : null}
+      </p>
+
+      {!gd?.configured ? (
+        <p className="muted small">Google Drive isn’t configured on this server.</p>
+      ) : gd.connected ? (
+        <>
+          <p className="muted small">
+            New generated media uploads to your <code>{gd.folderName}</code> folder in Google Drive
+            and doesn’t count against your 5 GB local cap.
+          </p>
+          <div className="row-btns">
+            <button onClick={verify} disabled={busy}>{busy ? 'Working…' : 'Verify cloud files'}</button>
+            <button className="danger" onClick={disconnect} disabled={busy}>Disconnect</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="muted small">
+            Connect Google Drive to store generated images and videos in your own Drive
+            instead of local disk.
+          </p>
+          <button onClick={() => { window.location.href = '/api/storage/google/connect'; }}>
+            Connect Google Drive
+          </button>
+        </>
+      )}
+      {error && <p className="error">{error}</p>}
+      {note && <p className="muted small">{note}</p>}
+    </>
+  );
+}
+
+function AdminInvites() {
+  const [invite, setInvite] = useState(null);
+  const [makeAdmin, setMakeAdmin] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function generateInvite() {
+    setError('');
+    setBusy(true);
+    try {
+      setInvite(await api('/auth/invites', { method: 'POST', body: { isAdmin: makeAdmin } }));
+    } catch (err) {
+      setError(err.message || 'Failed to create invite');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const signupUrl = invite ? `${window.location.origin}${invite.signupPath}` : '';
+
+  return (
+    <>
+      <label className="check">
+        <input type="checkbox" checked={makeAdmin} onChange={(e) => setMakeAdmin(e.target.checked)} />
+        Grant admin to the new account
+      </label>
+      <button onClick={generateInvite} disabled={busy}>
+        {busy ? 'Generating…' : 'Create invite token'}
+      </button>
+      {error && <p className="error">{error}</p>}
+      {invite && (
+        <div className="invite-out">
+          <div className="card-head">
+            <p className="muted small">New invite</p>
+            <button className="close-x" title="Dismiss" aria-label="Dismiss" onClick={() => setInvite(null)}>✕</button>
+          </div>
+          <p>Token (share out-of-band, one-time use):</p>
+          <code className="secret">{invite.token}</code>
+          <p className="muted small">Sign-up link:</p>
+          <code className="secret">{signupUrl}</code>
+          <p className="muted small">
+            Expires {new Date(invite.expiresAt).toLocaleString()} · admin: {String(invite.isAdmin)}
+          </p>
+        </div>
+      )}
+    </>
+  );
+}
+```
+
+### File: `client/src/styles.css`
+
+```css
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  --bg: #0f1117;
+  --panel: #1a1d27;
+  --border: #2a2e3a;
+  --text: #e6e8ee;
+  --muted: #9aa0ad;
+  --accent: #6d8cff;
+  --error: #ff8a8a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+/* ── auth pages ─────────────────────────────────────────── */
+.auth {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem 1rem;
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.75rem;
+}
+
+.card h1 { margin: 0 0 0.5rem; font-size: 1.4rem; }
+.card h2 { margin: 0 0 0.5rem; font-size: 1.2rem; }
+.card h3 { margin: 1rem 0 0.25rem; font-size: 1rem; }
+
+label {
+  display: block;
+  margin: 1rem 0 0;
+  font-size: 0.9rem;
+}
+
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+input[type='text'], input[type='email'], input[type='password'], input:not([type]), select {
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.6rem 0.7rem;
+  background: #0f1117;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 1rem;
+}
+
+button {
+  margin-top: 1.25rem;
+  width: 100%;
+  padding: 0.65rem 1rem;
+  background: var(--accent);
+  color: #0b0e16;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.topbar button, .admin button { width: auto; margin-top: 0; }
+
+.muted { color: var(--muted); }
+.small { font-size: 0.82rem; }
+.error { color: var(--error); margin: 0.75rem 0 0; }
+
+a { color: var(--accent); }
+
+/* ── enrollment ─────────────────────────────────────────── */
+.qr {
+  display: block;
+  margin: 1rem auto;
+  background: #fff;
+  padding: 8px;
+  border-radius: 8px;
+}
+.manual { margin: 0.5rem 0; }
+.secret {
+  display: block;
+  word-break: break-all;
+  background: #0f1117;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  margin: 0.35rem 0;
+  font-size: 0.9rem;
+}
+.codes {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+}
+.codes code {
+  display: block;
+  background: #0f1117;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  text-align: center;
+}
+
+/* ── home ───────────────────────────────────────────────── */
+.home { max-width: 720px; margin: 0 auto; padding: 1.5rem 1rem; }
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.placeholder { padding: 3rem 0; text-align: center; }
+.admin { max-width: none; margin-top: 1.5rem; }
+.invite-out { margin-top: 1rem; }
+
+/* ── app shell (Step 2: sidebar + panes) ────────────────────── */
+.app-shell {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: 100vh;
+}
+.app-shell.sidebar-collapsed { grid-template-columns: 52px 1fr; }
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  min-height: 100vh;
+}
+.sidebar.collapsed {
+  align-items: center;
+  padding-top: 0.75rem;
+  gap: 0.5rem;
+}
+.sidebar-head {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.new-chat {
+  flex: 1;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+}
+.icon-btn {
+  width: auto;
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 1rem;
+  line-height: 1;
+}
+.icon-btn:hover { color: var(--text); }
+
+.chat-list { flex: 1; overflow-y: auto; padding: 0.5rem; }
+.chat-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.chat-item:hover { background: #0f1117; }
+.chat-item.active { background: #0f1117; outline: 1px solid var(--border); }
+.chat-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-modality {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.05rem 0.35rem;
+}
+.pad { padding: 0.6rem; }
+
+.sidebar-foot { padding: 0.5rem; border-top: 1px solid var(--border); }
+.foot-link {
+  display: block;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.foot-link:hover, .foot-link.active { background: #0f1117; color: var(--text); }
+
+.main-col { display: flex; flex-direction: column; min-height: 100vh; min-width: 0; }
+.main-col .topbar { padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border); }
+.topbar-right { display: flex; align-items: center; gap: 1rem; }
+.link-btn {
+  width: auto;
+  margin: 0;
+  padding: 0.35rem 0.7rem;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.pane { flex: 1; padding: 1.5rem; overflow-y: auto; }
+
+.pane-empty { max-width: 520px; margin: 3rem auto; text-align: center; }
+.pane-empty button.inline { width: auto; padding: 0.55rem 1.1rem; }
+
+/* chat pane */
+.chat-pane { max-width: 760px; margin: 0 auto; }
+.chat-settings.card, .settings .card { max-width: none; }
+.row-btns { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+.row-btns button { width: auto; margin: 0; padding: 0.55rem 1rem; }
+button.danger { background: transparent; color: var(--error); border: 1px solid var(--error); }
+.thread { margin-top: 1.5rem; }
+.thread-empty {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 3rem 1rem;
+  text-align: center;
+}
+
+/* settings */
+.settings { max-width: 640px; margin: 0 auto; }
+.settings h1 { margin: 0 0 1rem; }
+.settings .card { margin-bottom: 1.5rem; }
+.key-status { margin: 0.75rem 0; }
+.secret.inline { display: inline; padding: 0.15rem 0.4rem; }
+
+/* ── sidebar chat row + kebab (edit menu) ───────────────────── */
+.chat-row { display: flex; align-items: center; }
+.chat-row .chat-item { flex: 1; min-width: 0; }
+.kebab {
+  width: auto;
+  margin: 0 0.15rem 0 0;
+  padding: 0.35rem 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  line-height: 1;
+  opacity: 0.5;
+}
+.chat-row:hover .kebab { opacity: 1; }
+.kebab:hover { color: var(--text); background: #0f1117; }
+
+/* ── chat pane header + dismissible editor ──────────────────── */
+.chat-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+.chat-heading { margin: 0; font-size: 1.35rem; overflow: hidden; text-overflow: ellipsis; }
+.chat-settings.card { margin-top: 1rem; }
+.card-head { display: flex; align-items: center; justify-content: space-between; }
+.card-head h2, .card-head p { margin: 0; }
+.close-x {
+  width: auto;
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.close-x:hover { color: var(--text); background: #0f1117; }
+
+/* ── settings: header + collapsible sections ────────────────── */
+.settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.settings-head h1 { margin: 0; }
+.card-head.clickable { cursor: pointer; }
+.card-head.clickable h2 { margin: 0; }
+.card-body { margin-top: 0.75rem; }
+
+/* ── Step 3: model bar, provider controls ───────────────────── */
+.model-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 0.75rem;
+}
+.model-select {
+  width: auto;
+  margin: 0;
+  padding: 0.45rem 0.8rem;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-weight: 500;
+  font-size: 0.9rem;
+  max-width: 100%;
+}
+.model-select:hover { border-color: var(--accent); }
+.model-select:disabled { cursor: not-allowed; opacity: 0.85; }
+.model-select:disabled:hover { border-color: var(--border); }
+.model-lock { font-size: 0.82em; opacity: 0.75; }
+.model-current { font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; }
+.provider-controls { display: flex; align-items: center; gap: 0.75rem; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button {
+  width: auto;
+  margin: 0;
+  padding: 0.35rem 0.7rem;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-radius: 0;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+.seg button.on { background: var(--accent); color: #0b0e16; }
+label.check.privacy { margin: 0; font-size: 0.82rem; color: var(--muted); }
+
+/* ── modal (model picker) ───────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid; place-items: center;
+  padding: 1.5rem; z-index: 50;
+}
+.modal {
+  width: 100%; max-width: 640px;
+  max-height: 80vh; display: flex; flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.modal-head, .picker-filters { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); }
+.modal-head { display: flex; align-items: center; justify-content: space-between; }
+.modal-head h2 { margin: 0; }
+.picker-filters { display: flex; gap: 0.6rem; }
+.picker-filters input { margin: 0; flex: 1; }
+.picker-filters select { margin: 0; width: auto; }
+.model-list { overflow-y: auto; padding: 0.5rem; }
+.model-item {
+  width: 100%; margin: 0 0 0.4rem; padding: 0.7rem 0.8rem;
+  background: #0f1117; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  text-align: left; font-weight: 400; cursor: pointer;
+}
+.model-item:hover { border-color: var(--accent); }
+.model-item.selected { border-color: var(--accent); outline: 1px solid var(--accent); }
+.model-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
+.model-name { font-weight: 600; }
+.model-price { flex-shrink: 0; font-size: 0.78rem; color: var(--accent); }
+.model-id { font-family: ui-monospace, monospace; margin-top: 0.15rem; }
+.model-desc { margin: 0.4rem 0 0; line-height: 1.35; }
+
+/* ── message thread + composer ──────────────────────────────── */
+.chat-pane { display: flex; flex-direction: column; min-height: 0; }
+.thread { flex: 1; overflow-y: auto; }
+.msgs { display: flex; flex-direction: column; gap: 0.9rem; padding-bottom: 0.5rem; }
+.msg { border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.8rem; }
+.msg.user { background: #161a24; }
+.msg.assistant { background: var(--panel); }
+.msg-role {
+  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); margin-bottom: 0.3rem;
+}
+.msg-content { white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+.caret { color: var(--accent); animation: blink 1s steps(2, start) infinite; }
+@keyframes blink { to { visibility: hidden; } }
+
+.send-error { margin: 0.75rem 0 0; padding: 0.6rem 0.8rem; border-radius: 8px; font-size: 0.9rem; }
+.send-error.act { background: #2a1a1a; border: 1px solid var(--error); color: #ffd7d7; }
+.send-error.model { background: #22222c; border: 1px solid var(--border); color: var(--text); }
+
+.composer { display: flex; gap: 0.6rem; align-items: flex-end; margin-top: 0.9rem; }
+.composer textarea {
+  flex: 1; resize: vertical; min-height: 2.6rem;
+  padding: 0.6rem 0.7rem; margin: 0;
+  background: #0f1117; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  font: inherit; font-size: 0.95rem;
+}
+.composer button { width: auto; margin: 0; padding: 0.6rem 1.2rem; align-self: stretch; }
+
+/* ── Step 3.1 layout: full-height shell, pinned composer, independent scroll ──
+   The shell is exactly one viewport tall and hides overflow, so nothing scrolls
+   as a whole. Inside it, only two regions scroll on their own: the sidebar's
+   chat list and the chat message thread. The new-chat button (top) and Settings
+   link (bottom) stay put; the composer stays pinned below a scrolling thread. */
+html, body, #root { height: 100%; }
+
+.app-shell { height: 100vh; min-height: 0; overflow: hidden; grid-template-rows: minmax(0, 1fr); }
+
+.sidebar { height: 100%; min-height: 0; overflow: hidden; }
+.sidebar-head, .sidebar-foot { flex-shrink: 0; }
+.chat-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+.main-col { height: 100%; min-height: 0; overflow: hidden; }
+.main-col .topbar { flex-shrink: 0; }
+
+.pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+
+.chat-pane {
+  flex: 1 1 auto; min-height: 0;
+  width: 100%; max-width: 860px; margin: 0 auto; align-self: center;
+  display: flex; flex-direction: column;
+  padding: 1.1rem 1.5rem 1rem;
+}
+.chat-header, .model-bar, .chat-settings.card, .send-error, .composer { flex-shrink: 0; }
+.thread { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-top: 0.5rem; }
+.composer { margin-top: 0.8rem; }
+
+/* non-chat panes (settings / empty) scroll within the fixed shell */
+.settings {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  width: 100%; max-width: 640px; margin: 0 auto; align-self: center;
+  padding: 1.5rem;
+}
+.pane-empty { align-self: center; width: 100%; max-width: 520px; margin: 3rem auto; padding: 0 1.5rem; }
+
+/* ── Step 3.2: routing-control clarity + per-reply cost ──────── */
+.ctrl-label { font-size: 0.8rem; color: var(--muted); }
+.info-btn {
+  width: auto; margin: 0; padding: 0.1rem 0.35rem;
+  background: transparent; color: var(--muted);
+  border: none; border-radius: 6px; font-size: 0.95rem; line-height: 1;
+}
+.info-btn:hover { color: var(--accent); }
+.routing-help {
+  margin: 0 0 0.6rem;
+  padding: 0.55rem 0.7rem;
+  background: #161a24;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  line-height: 1.45;
+}
+.msg-cost { margin-top: 0.35rem; font-family: ui-monospace, monospace; }
+
+/* ── Step 4: attachments (image input) ──────────────────────── */
+.composer-wrap { flex-shrink: 0; margin-top: 0.9rem; }
+.composer { margin-top: 0; }
+.attach-btn {
+  width: auto; margin: 0; align-self: stretch;
+  padding: 0 0.7rem;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 8px;
+  font-size: 1.1rem;
+}
+.attach-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+
+.attach-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
+.chip {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.25rem 0.4rem 0.25rem 0.25rem;
+  background: #0f1117; border: 1px solid var(--border); border-radius: 8px;
+  max-width: 220px;
+}
+.chip-thumb { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; flex-shrink: 0; }
+.chip-name { font-size: 0.8rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-x { width: auto; margin: 0; padding: 0 0.25rem; background: transparent; color: var(--muted); border: none; font-size: 0.8rem; }
+.chip-x:hover { color: var(--error); }
+
+.msg-attachments { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
+.msg-image {
+  max-width: 260px; max-height: 260px; width: auto; height: auto;
+  border: 1px solid var(--border); border-radius: 8px; display: block;
+}
+
+.badge {
+  font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 0.05rem 0.3rem; margin-left: 0.4rem; border-radius: 5px;
+  vertical-align: middle;
+}
+.badge.vision { background: rgba(109, 140, 255, 0.18); color: var(--accent); border: 1px solid var(--accent); }
+
+/* ── image/video billing chip: compact in the model bar, expands on hover ── */
+.cost-note-compact {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;          /* match the model-select button height */
+  display: flex;
+  align-items: center;
+  padding: 0 0.6rem;
+  background: #2a2410;
+  border: 1px solid #6b5a1f;
+  border-radius: 8px;
+  color: #f0e0a8;
+  font-size: 0.76rem;
+  cursor: help;
+  /* no overflow:hidden here — it would clip the hover panel below the chip */
+}
+.cnc-summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto; }
+.cnc-notice { color: #ff4d4d; font-weight: 800; letter-spacing: 0.03em; margin-right: 0.45rem; }
+.cnc-full {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  background: #2a2410;
+  border: 1px solid #6b5a1f;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  line-height: 1.5;
+  white-space: normal;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.cost-note-compact:hover .cnc-full,
+.cost-note-compact:focus .cnc-full,
+.cost-note-compact:focus-within .cnc-full { display: block; }
+.cnc-disclaimer { margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px solid #6b5a1f; }
+.cnc-full a, .picker-disclaimer a { color: #ffd873; text-decoration: underline; }
+
+.picker-disclaimer { margin: 0; padding: 0.55rem 1.25rem; border-top: 1px solid var(--border); }
+
+/* ── Step 6: video output + async pending + confirm dialog ──── */
+.msg-video {
+  max-width: 360px; width: 100%; height: auto;
+  border: 1px solid var(--border); border-radius: 8px; display: block;
+  background: #000;
+}
+.error-inline {
+  color: var(--error);
+  background: rgba(255, 90, 90, 0.08);
+  border: 1px solid var(--error);
+  border-radius: 8px;
+  padding: 0.45rem 0.65rem;
+}
+
+.modal.confirm { max-width: 460px; }
+.confirm-body { padding: 1rem 1.25rem; line-height: 1.5; }
+.confirm-body p { margin: 0 0 0.7rem; }
+.confirm-facts { list-style: none; margin: 0 0 0.7rem; padding: 0.6rem 0.8rem; background: var(--panel-2, rgba(255,255,255,0.03)); border: 1px solid var(--border); border-radius: 8px; }
+.confirm-facts li { margin: 0.15rem 0; }
+.confirm-facts code { font-size: 0.85em; word-break: break-all; }
+.confirm-body .warn, p.warn {
+  margin: 0 0 0.7rem; padding: 0.5rem 0.7rem;
+  background: #2a2410; border: 1px solid #6b5a1f; border-radius: 8px; color: #f0e0a8;
+}
+.modal.confirm .row-btns { padding: 0 1.25rem 1.25rem; margin-top: 0.5rem; }
+button.danger-solid { background: var(--error); color: #fff; border: 1px solid var(--error); }
+button.danger-solid:hover { filter: brightness(1.08); }
+
+/* ── Step 7: persistent local-storage notice + settings usage bar ──── */
+.storage-notice {
+  padding: 0.55rem 1.25rem;
+  border-bottom: 1px solid #6b5a1f;
+  background: #2a2410;
+  color: #f0e0a8;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.storage-notice.at-cap {
+  border-bottom-color: var(--error);
+  background: rgba(255, 90, 90, 0.1);
+  color: var(--error);
+}
+.storage-notice a { color: inherit; text-decoration: underline; }
+
+.storage-meter { margin: 0.35rem 0 0.25rem; }
+.storage-bar {
+  height: 10px; border-radius: 6px; overflow: hidden;
+  background: #0f1117; border: 1px solid var(--border);
+}
+.storage-bar-fill {
+  height: 100%; background: var(--accent);
+  transition: width 0.3s ease;
+}
+.storage-bar-fill.warn { background: #d9b24a; }
+.storage-bar-fill.full { background: var(--error); }
+
+/* ── Step 8: cloud storage — unavailable (out-of-band-deleted) media ──── */
+.msg-unavailable {
+  display: inline-flex; align-items: center;
+  max-width: 360px; padding: 0.6rem 0.8rem;
+  border: 1px dashed var(--border); border-radius: 8px;
+  background: #0f1117; color: var(--muted); font-size: 0.85rem;
+}
+button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+/* ── Step 11: credits + spend dashboard ─────────────────────────── */
+.credits { margin-top: 1rem; }
+.credits-list {
+  list-style: none; padding: 0; margin: 0.75rem 0 0;
+  display: flex; flex-wrap: wrap; gap: 1.5rem;
+}
+.credits-list li { display: flex; flex-direction: column; gap: 0.15rem; }
+.credits-list strong { font-size: 1.05rem; }
+
+.spend-totals { display: flex; gap: 1.5rem; margin-bottom: 0.75rem; }
+.spend-total {
+  flex: 1; display: flex; flex-direction: column; gap: 0.2rem;
+  padding: 0.85rem 1rem; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel);
+}
+.spend-total strong { font-size: 1.35rem; }
+
+.spend-table { width: 100%; border-collapse: collapse; margin: 0.25rem 0 0.5rem; }
+.spend-table td { padding: 0.4rem 0; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.spend-name {
+  max-width: 0; width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.spend-count { text-align: right; padding-right: 1rem; white-space: nowrap; }
+.spend-amt { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+```
+
+### File: `client/vite.config.js`
+
+```javascript
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+// Dev server runs on 5173 and proxies /api to the Express backend on 8000,
+// so the frontend can call the API on a same-origin path without CORS in dev.
+//
+// When VITE_BEHIND_PROXY=1 (npm run dev:proxy), the dev server is being fronted
+// by an HTTPS reverse proxy (nginx) on a real hostname:
+//   - allowedHosts: true  → accept the proxied Host header
+//   - hmr over wss on 443 → live-reload works through the TLS proxy
+// No hostname is hardcoded here; the proxy host is configured in nginx.
+const behindProxy = process.env.VITE_BEHIND_PROXY === '1';
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+    ...(behindProxy && {
+      allowedHosts: true,
+      hmr: { clientPort: 443, protocol: 'wss' },
+    }),
+  },
+});
+```
+
+### File: `package.json`
+
+```json
+{
+  "name": "mmchat",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Multi-Model AI Chat Client — monorepo root",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:proxy": "concurrently -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client:proxy\"",
+    "dev:server": "npm --workspace server run dev",
+    "dev:client": "npm --workspace client run dev",
+    "dev:client:proxy": "npm --workspace client run dev:proxy",
+    "start:server": "npm --workspace server run start",
+    "build:client": "npm --workspace client run build",
+    "migrate": "npm --workspace server run migrate",
+    "migrate:status": "npm --workspace server run migrate:status"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
+```
+
+### File: `server/.env.example`
+
+```ini
+# ─────────────────────────────────────────────────────────────
+# mmchat backend environment — copy to `.env` and fill in.
+# NEVER commit the real .env (it's gitignored). Only this example.
+# ─────────────────────────────────────────────────────────────
+
+# HTTP server
+PORT=8000
+NODE_ENV=development
+
+# PostgreSQL. The app connects to the local Postgres on 127.0.0.1:5432.
+# Create a dedicated database + role for mmchat before running the migration:
+#   sudo -u postgres psql -c "CREATE ROLE mmchat LOGIN PASSWORD 'change-me';"
+#   sudo -u postgres psql -c "CREATE DATABASE mmchat OWNER mmchat;"
+DATABASE_URL=postgres://mmchat:change-me@127.0.0.1:5432/mmchat
+
+# AES-256-GCM master key used to encrypt secrets at rest (TOTP secrets now;
+# OpenRouter key + cloud refresh tokens later). Must be 32 bytes, hex-encoded
+# (64 hex chars). Generate one with:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+ENCRYPTION_KEY=replace-with-64-hex-chars
+
+# Secret used to sign session + trusted-device cookies. Generate with:
+#   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+SESSION_SECRET=replace-with-a-long-random-string
+
+# Cookie security. MUST be true in production (served over HTTPS behind nginx).
+# Set false for local http dev / SSH-tunnel, or the browser drops the cookie.
+COOKIE_SECURE=false
+
+# How long a trusted device skips the TOTP challenge, in days (default 30).
+TRUSTED_DEVICE_DAYS=30
+
+# Comma-separated origins allowed to call the API (the frontend). Dev = Vite.
+# Production example: https://your-domain.example
+CORS_ORIGIN=http://localhost:5173
+
+# OpenRouter. The base URL rarely changes; override only for a mock/proxy.
+# Users bring their own OpenRouter key (stored per-account, encrypted) — there
+# is NO server-wide API key here. Title/URL are optional attribution headers.
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_APP_TITLE=mmchat
+OPENROUTER_APP_URL=
+
+# Local media storage for uploaded input (and, later, generated output).
+# Defaults to ./storage relative to the server's working dir (gitignored).
+# 5 GB per-user cap with an in-app notice at 3.5 GB; per-file + per-message caps.
+STORAGE_DIR=./storage
+MAX_LOCAL_BYTES=5368709120
+NOTICE_LOCAL_BYTES=3758096384
+MAX_UPLOAD_BYTES=20971520
+MAX_ATTACHMENTS=6
+
+# Video generation (async). Max concurrent pending video jobs per user — a
+# spend-protection backstop; the disabled button + idempotency key are primary.
+MAX_CONCURRENT_VIDEOS=2
+
+# ── Cloud storage: Google Drive (Step 8) ──────────────────────────────────
+# Optional. If unset, Drive isn't offered in Settings and all media stays local.
+# Create an OAuth client in the Google Cloud console (APIs & Services →
+# Credentials → OAuth client ID → Web application), enable the Drive API, and add
+# the redirect URI  <PUBLIC_BASE_URL>/api/storage/google/callback  to the client.
+# Scope used is drive.file (least privilege — the app only touches files it
+# creates). Keep the client secret out of source control (real values in .env).
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+# The app's externally-reachable origin (no trailing slash), used to build the
+# OAuth redirect URI. Dev example (behind the reverse proxy): https://your-dev-host
+PUBLIC_BASE_URL=
+# Google endpoint base URLs — override only to point at a mock in tests.
+GOOGLE_AUTH_BASE=https://accounts.google.com
+GOOGLE_OAUTH_BASE=https://oauth2.googleapis.com
+GOOGLE_API_BASE=https://www.googleapis.com
+```
+
+### File: `server/db/migrate.js`
+
+```javascript
+#!/usr/bin/env node
+// ─────────────────────────────────────────────────────────────────────────
+// Minimal forward-only SQL migration runner.
+//
+//   node db/migrate.js up       apply all pending migrations (default)
+//   node db/migrate.js status   list applied / pending migrations
+//
+// Migrations live in db/migrations/*.sql and run in filename order. Each is
+// applied inside a transaction and recorded in the schema_migrations table, so
+// re-running is safe and only pending files execute.
+// ─────────────────────────────────────────────────────────────────────────
+import { readdir, readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import pg from 'pg';
+import { config } from '../src/config.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const MIGRATIONS_DIR = join(__dirname, 'migrations');
+
+async function loadMigrationFiles() {
+  const entries = await readdir(MIGRATIONS_DIR);
+  return entries.filter((f) => f.endsWith('.sql')).sort();
+}
+
+async function ensureMigrationsTable(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      filename    text        PRIMARY KEY,
+      applied_at  timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+}
+
+async function appliedSet(client) {
+  const { rows } = await client.query('SELECT filename FROM schema_migrations');
+  return new Set(rows.map((r) => r.filename));
+}
+
+async function runUp(client) {
+  await ensureMigrationsTable(client);
+  const files = await loadMigrationFiles();
+  const applied = await appliedSet(client);
+  const pending = files.filter((f) => !applied.has(f));
+
+  if (pending.length === 0) {
+    console.log('[migrate] nothing to do — database is up to date.');
+    return;
+  }
+
+  for (const file of pending) {
+    const sql = await readFile(join(MIGRATIONS_DIR, file), 'utf8');
+    console.log(`[migrate] applying ${file} ...`);
+    try {
+      await client.query('BEGIN');
+      await client.query(sql);
+      await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);
+      await client.query('COMMIT');
+      console.log(`[migrate] ✓ ${file}`);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw new Error(`Migration ${file} failed: ${err.message}`);
+    }
+  }
+  console.log(`[migrate] done — applied ${pending.length} migration(s).`);
+}
+
+async function runStatus(client) {
+  await ensureMigrationsTable(client);
+  const files = await loadMigrationFiles();
+  const applied = await appliedSet(client);
+  console.log('[migrate] status:');
+  for (const file of files) {
+    console.log(`  ${applied.has(file) ? '✓ applied' : '· pending'}  ${file}`);
+  }
+}
+
+async function main() {
+  const cmd = process.argv[2] || 'up';
+  const client = new pg.Client({ connectionString: config.databaseUrl });
+  await client.connect();
+  try {
+    if (cmd === 'up') await runUp(client);
+    else if (cmd === 'status') await runStatus(client);
+    else {
+      console.error(`Unknown command: ${cmd}. Use "up" or "status".`);
+      process.exitCode = 1;
+    }
+  } finally {
+    await client.end();
+  }
+}
+
+main().catch((err) => {
+  console.error('[migrate] error:', err.message);
+  process.exit(1);
+});
+```
+
+### File: `server/db/migrations/001_initial_schema.sql`
+
+```sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- 001_initial_schema
+-- Full database schema from chat_project_bible.md → "Database Schema".
+-- Tables are created in dependency order (referenced tables first).
+-- Enum-like columns use TEXT + CHECK constraints (flexible across migrations).
+-- ─────────────────────────────────────────────────────────────────────────
+-- gen_random_uuid() is built into PostgreSQL core since v13 (Ubuntu 24.04
+-- ships v16), so no pgcrypto extension — and thus no superuser — is required
+-- to run this migration as the unprivileged mmchat role.
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- ── users ────────────────────────────────────────────────────────────────
+-- is_admin: can generate invite_tokens and reset other users' credentials.
+CREATE TABLE users (
+  id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  email              text        NOT NULL UNIQUE,
+  password_hash      text        NOT NULL,
+  storage_used_bytes bigint      NOT NULL DEFAULT 0,
+  is_admin           boolean     NOT NULL DEFAULT false,
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+
+-- ── totp_secrets (one per user) ──────────────────────────────────────────
+-- backup_codes: array of *hashed* one-time codes, shown once at enrollment.
+CREATE TABLE totp_secrets (
+  user_id      uuid        PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  secret       text        NOT NULL,
+  backup_codes jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  verified_at  timestamptz
+);
+
+-- ── trusted_devices ──────────────────────────────────────────────────────
+-- Marks a specific browser as TOTP-verified for a period. Token stored hashed
+-- so it can be revoked individually (settings) or in bulk (password change,
+-- admin reset).
+CREATE TABLE trusted_devices (
+  id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id          uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash       text        NOT NULL UNIQUE,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  expires_at       timestamptz NOT NULL,
+  last_used_at     timestamptz,
+  user_agent_label text
+);
+CREATE INDEX idx_trusted_devices_user ON trusted_devices(user_id);
+
+-- ── invite_tokens ────────────────────────────────────────────────────────
+-- Admin-generated, single-use, shared out-of-band; replaces self-service signup.
+CREATE TABLE invite_tokens (
+  id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  token_hash         text        NOT NULL UNIQUE,
+  created_by_user_id uuid        REFERENCES users(id) ON DELETE SET NULL,
+  used_at            timestamptz,
+  expires_at         timestamptz NOT NULL,
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+
+-- ── api_keys ─────────────────────────────────────────────────────────────
+-- encrypted_key: AES-256-GCM ciphertext of the user's OpenRouter key.
+-- key_suffix: last 4 chars, the only part ever shown back to the client.
+CREATE TABLE api_keys (
+  id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  encrypted_key text        NOT NULL,
+  key_suffix    text        NOT NULL,
+  label         text,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_api_keys_user ON api_keys(user_id);
+
+-- ── chats ────────────────────────────────────────────────────────────────
+-- One model, one modality, one message thread per chat.
+CREATE TABLE chats (
+  id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title      text,
+  model_id   text,
+  modality   text        NOT NULL CHECK (modality IN ('text', 'image', 'video')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_chats_user ON chats(user_id);
+
+-- ── messages ─────────────────────────────────────────────────────────────
+-- cost_usd: computed at generation time; set on assistant/output rows only.
+-- metadata: modality-specific state, e.g. video job_id + status while pending.
+CREATE TABLE messages (
+  id           uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+  chat_id      uuid          NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  role         text          NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+  content      text,
+  content_type text,
+  cost_usd     numeric(12, 6),
+  metadata     jsonb         NOT NULL DEFAULT '{}'::jsonb,
+  created_at   timestamptz   NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_messages_chat ON messages(chat_id);
+
+-- ── storage_accounts ─────────────────────────────────────────────────────
+-- Linked cloud storage. Defined before media_files (which references it).
+-- For webdav: encrypted_refresh_token holds encrypted credentials;
+-- folder_ref holds the endpoint URL + path.
+-- priority: lower = tried first. quota_bytes null = unlimited (app-imposed).
+-- bytes_used: denormalized counter, same pattern as users.storage_used_bytes.
+CREATE TABLE storage_accounts (
+  id                      uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id                 uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider                text        NOT NULL CHECK (provider IN ('google_drive', 'dropbox', 'onedrive', 'webdav')),
+  encrypted_refresh_token text        NOT NULL,
+  folder_ref              text,
+  priority                integer     NOT NULL DEFAULT 0,
+  quota_bytes             bigint,
+  bytes_used              bigint      NOT NULL DEFAULT 0,
+  connected_at            timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_storage_accounts_user ON storage_accounts(user_id);
+
+-- ── media_files ──────────────────────────────────────────────────────────
+-- direction: input = user-uploaded (vision/file attach), output = generated.
+-- storage_account_id: which linked account got the file (null = local disk),
+-- needed for per-account quota enforcement.
+CREATE TABLE media_files (
+  id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  message_id         uuid        NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  direction          text        NOT NULL CHECK (direction IN ('input', 'output')),
+  storage_location   text        NOT NULL CHECK (storage_location IN ('local', 'google_drive', 'dropbox', 'onedrive', 'webdav')),
+  storage_account_id uuid        REFERENCES storage_accounts(id) ON DELETE SET NULL,
+  file_ref           text        NOT NULL,
+  size_bytes         bigint      NOT NULL DEFAULT 0,
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_media_files_message ON media_files(message_id);
+CREATE INDEX idx_media_files_storage_account ON media_files(storage_account_id);
+
+-- ── sessions ─────────────────────────────────────────────────────────────
+-- Schema matches connect-pg-simple's expected table (configure the store with
+-- tableName: 'sessions'). Server-side session store, not hand-rolled.
+CREATE TABLE sessions (
+  sid    varchar      NOT NULL COLLATE "default",
+  sess   json         NOT NULL,
+  expire timestamp(6) NOT NULL,
+  CONSTRAINT sessions_pkey PRIMARY KEY (sid) NOT DEFERRABLE INITIALLY IMMEDIATE
+);
+CREATE INDEX idx_sessions_expire ON sessions(expire);
+```
+
+### File: `server/db/migrations/002_invite_is_admin.sql`
+
+```sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- 002_invite_is_admin
+-- Invite tokens need to carry whether the account they create is an admin,
+-- so the *first* admin can be bootstrapped through the normal invite flow
+-- (there's no existing admin to grant it otherwise). Additive column only.
+-- ─────────────────────────────────────────────────────────────────────────
+
+ALTER TABLE invite_tokens
+  ADD COLUMN is_admin boolean NOT NULL DEFAULT false;
+```
+
+### File: `server/db/migrations/003_pending_generation_guard.sql`
+
+```sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- 003_pending_generation_guard
+-- Spend-protection idempotency (bible → "Spend Protection"): the backend must
+-- refuse a second generation request against a chat that already has one in
+-- flight. A partial UNIQUE index enforces "at most one pending assistant/output
+-- message per chat" atomically at the DB level, so two concurrent submits
+-- (double-click, reload re-fire) can't both spend — the second INSERT fails.
+--
+-- metadata.status is set to 'pending' while a generation is in flight and
+-- updated to 'complete' on success (or the pending row is removed on failure).
+-- ─────────────────────────────────────────────────────────────────────────
+
+CREATE UNIQUE INDEX idx_messages_one_pending_per_chat
+  ON messages (chat_id)
+  WHERE role = 'assistant' AND (metadata ->> 'status') = 'pending';
+```
+
+### File: `server/db/migrations/004_cloud_storage.sql`
+
+```sql
+-- Step 8 (cloud storage — Google Drive first). Adds the columns the cloud path
+-- needs on media_files, and pins one storage_accounts row per (user, provider).
+
+-- unavailable_at: set when a cloud file is found deleted on the provider side
+--   (out-of-band) — via lazy detection when we try to serve it, or the manual
+--   "verify cloud files" action. The row is KEPT (message history + cost_usd must
+--   survive) but stops being served and (Step 9) stops counting bytes. Always
+--   NULL for local files, whose deletion removes the row outright (Step 7).
+ALTER TABLE media_files ADD COLUMN unavailable_at timestamptz;
+
+-- content_type: the file's MIME type recorded at write time. Local refs carry an
+--   extension we can infer from, but a cloud file_ref is an opaque provider file
+--   id with no extension — so we store the type explicitly (used to serve the
+--   right Content-Type and to pick <img> vs <video> in the client). Existing
+--   local rows stay NULL and fall back to extension-based detection.
+ALTER TABLE media_files ADD COLUMN content_type text;
+
+-- One linked account per provider per user (Step 8 connects Drive once; reconnect
+-- is an idempotent upsert). Step 9's priority ordering is across providers.
+ALTER TABLE storage_accounts
+  ADD CONSTRAINT uq_storage_account_user_provider UNIQUE (user_id, provider);
+```
+
+### File: `server/package.json`
+
+```json
+{
+  "name": "@mmchat/server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Multi-Model AI Chat Client — Express backend",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "migrate": "node db/migrate.js up",
+    "migrate:status": "node db/migrate.js status",
+    "invite": "node scripts/create-invite.js",
+    "reset-user": "node scripts/reset-user.js"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "^2.0.2",
+    "connect-pg-simple": "^10.0.0",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "express-session": "^1.18.1",
+    "helmet": "^8.0.0",
+    "multer": "^1.4.5-lts.1",
+    "otplib": "^12.0.1",
+    "pg": "^8.13.1",
+    "qrcode": "^1.5.4"
+  }
+}
+```
+
+### File: `server/scripts/create-invite.js`
+
+```javascript
+#!/usr/bin/env node
+// ─────────────────────────────────────────────────────────────────────────
+// Bootstrap / admin CLI to mint a one-time invite token.
+//
+//   node scripts/create-invite.js               # normal (non-admin) invite
+//   node scripts/create-invite.js --admin       # invite that creates an admin
+//   node scripts/create-invite.js --admin --expires-hours 168
+//
+// Run from the server/ directory (needs the DB env). This is inherently
+// privileged (it has DB access), so it needs no existing admin — use it once
+// with --admin to create your first account, then hand out invites either from
+// here or via the in-app admin button.
+// ─────────────────────────────────────────────────────────────────────────
+import { pool } from '../src/db.js';
+import { createInvite } from '../src/auth/invites.js';
+
+function parseArgs(argv) {
+  const args = { admin: false, expiresHours: 72 };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--admin') args.admin = true;
+    else if (argv[i] === '--expires-hours') args.expiresHours = Number(argv[++i]);
+  }
+  return args;
+}
+
+async function main() {
+  const { admin, expiresHours } = parseArgs(process.argv.slice(2));
+  const invite = await createInvite({
+    createdByUserId: null,
+    isAdmin: admin,
+    expiresInHours: expiresHours,
+  });
+
+  console.log('\nInvite created:');
+  console.log('  token      :', invite.raw);
+  console.log('  grants admin:', invite.is_admin);
+  console.log('  expires at :', new Date(invite.expires_at).toISOString());
+  console.log('\nSign-up link (open the frontend and append this path):');
+  console.log(`  /register?token=${encodeURIComponent(invite.raw)}\n`);
+  await pool.end();
+}
+
+main().catch(async (err) => {
+  console.error('create-invite failed:', err.message);
+  await pool.end().catch(() => {});
+  process.exit(1);
+});
+```
+
+### File: `server/scripts/recompute-storage.js`
+
+```javascript
+#!/usr/bin/env node
+// ─────────────────────────────────────────────────────────────────────────
+// Re-sync users.storage_used_bytes to the true sum of each user's local
+// media_files.size_bytes. Earlier builds only ever incremented the counter
+// (never decremented on delete), so counters can drift high — this repairs them.
+//
+//   node scripts/recompute-storage.js                    # every user
+//   node scripts/recompute-storage.js --email a@b.com    # one user
+//   node scripts/recompute-storage.js --dry-run          # report only, no writes
+//   node scripts/recompute-storage.js --sweep-orphans    # also delete disk orphans
+//
+// --sweep-orphans additionally removes files on disk that no media_files row
+// references (leftovers from a crash mid-write or a failed post-commit unlink).
+// Only files older than 5 minutes are swept, so an in-flight write is never hit.
+// Combine with --dry-run to preview, or --email to scope the sweep to one user.
+//
+// Run from the server/ directory (needs the DB env from .env). Safe to re-run.
+// ─────────────────────────────────────────────────────────────────────────
+import { pool } from '../src/db.js';
+import { config } from '../src/config.js';
+import {
+  listUsers,
+  trueLocalBytes,
+  recomputeUserStorage,
+  findOrphanFiles,
+  deleteOrphanFiles,
+} from '../src/storage/accounting.js';
+
+function parseArgs(argv) {
+  const args = { email: null, dryRun: false, sweepOrphans: false };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--email') args.email = argv[++i];
+    else if (argv[i] === '--dry-run') args.dryRun = true;
+    else if (argv[i] === '--sweep-orphans') args.sweepOrphans = true;
+  }
+  return args;
+}
+
+function gb(bytes) {
+  return `${(bytes / (1024 ** 3)).toFixed(2)} GB`;
+}
+
+async function currentCounter(userId) {
+  const { rows } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
+  return rows.length ? Number(rows[0].storage_used_bytes) : 0;
+}
+
+async function main() {
+  const { email, dryRun, sweepOrphans } = parseArgs(process.argv.slice(2));
+
+  let users = await listUsers();
+  if (email) {
+    users = users.filter((u) => u.email.toLowerCase() === email.toLowerCase());
+    if (!users.length) {
+      console.error(`No user found with email ${email}`);
+      await pool.end();
+      process.exit(1);
+    }
+  }
+
+  console.log(`\nRecompute local storage counters${dryRun ? ' (dry run — no writes)' : ''}`);
+  console.log(`Cap ${gb(config.maxLocalBytes)} · notice ${gb(config.noticeLocalBytes)}\n`);
+
+  let changed = 0;
+  for (const u of users) {
+    if (dryRun) {
+      const before = await currentCounter(u.id);
+      const truth = await trueLocalBytes(pool, u.id);
+      const delta = truth - before;
+      if (delta !== 0) changed++;
+      console.log(
+        `${u.email.padEnd(32)} counter ${gb(before)} → true ${gb(truth)}` +
+        (delta !== 0 ? `  (drift ${delta > 0 ? '+' : ''}${gb(delta)})` : '  (ok)'),
+      );
+    } else {
+      const r = await recomputeUserStorage(u.id);
+      if (!r) continue;
+      if (r.before !== r.after) changed++;
+      console.log(
+        `${u.email.padEnd(32)} ${gb(r.before)} → ${gb(r.after)}` +
+        (r.before !== r.after ? '  (corrected)' : '  (ok)'),
+      );
+    }
+  }
+
+  console.log(
+    `\n${users.length} user(s) checked, ${changed} ${dryRun ? 'with drift' : 'corrected'}.` +
+    (dryRun && changed ? '  Re-run without --dry-run to apply.' : ''),
+  );
+
+  if (sweepOrphans) {
+    // Scope to the one user when --email is given; otherwise scan everyone.
+    const scope = email ? { userId: users[0].id } : {};
+    const orphans = await findOrphanFiles(scope);
+    const bytes = orphans.reduce((n, o) => n + o.sizeBytes, 0);
+    console.log(`\nDisk orphans${dryRun ? ' (dry run — no deletes)' : ''}: ${orphans.length} file(s), ${gb(bytes)}`);
+    for (const o of orphans) console.log(`  ${o.relpath}  (${gb(o.sizeBytes)})`);
+    if (!dryRun && orphans.length) {
+      const freed = await deleteOrphanFiles(orphans);
+      console.log(`Removed ${orphans.length} orphan(s), freed ${gb(freed)}.`);
+    } else if (dryRun && orphans.length) {
+      console.log('Re-run without --dry-run to delete these.');
+    }
+  }
+
+  console.log('');
+  await pool.end();
+}
+
+main().catch(async (err) => {
+  console.error('recompute-storage failed:', err.message);
+  await pool.end().catch(() => {});
+  process.exit(1);
+});
+```
+
+### File: `server/scripts/reset-user.js`
+
+```javascript
+#!/usr/bin/env node
+// ─────────────────────────────────────────────────────────────────────────
+// Manual account recovery CLI (run on the server with DB access).
+//
+//   node scripts/reset-user.js --email a@b.com --password 'NewPass123'
+//   node scripts/reset-user.js --email a@b.com --reset-totp
+//   node scripts/reset-user.js --email a@b.com --password 'x' --reset-totp
+//   node scripts/reset-user.js --email a@b.com --make-admin
+//
+// --password    set a new password (argon2). Also revokes trusted devices.
+// --reset-totp  clear TOTP so the user re-enrolls a fresh authenticator on
+//               next login (login → "set up authenticator" → verify).
+// --make-admin / --remove-admin  toggle the admin flag.
+//
+// Any password or TOTP change also revokes all of the user's trusted devices,
+// forcing a full re-auth.
+// ─────────────────────────────────────────────────────────────────────────
+import { pool } from '../src/db.js';
+import { hashPassword } from '../src/auth/password.js';
+import { revokeAllTrustedDevices } from '../src/auth/trustedDevice.js';
+
+function parseArgs(argv) {
+  const args = { email: null, password: null, resetTotp: false, makeAdmin: false, removeAdmin: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--email') args.email = String(argv[++i] || '').trim().toLowerCase();
+    else if (a === '--password') args.password = argv[++i];
+    else if (a === '--reset-totp') args.resetTotp = true;
+    else if (a === '--make-admin') args.makeAdmin = true;
+    else if (a === '--remove-admin') args.removeAdmin = true;
+  }
+  return args;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (!args.email) {
+    console.error('Usage: reset-user.js --email <email> [--password <new>] [--reset-totp] [--make-admin|--remove-admin]');
+    process.exit(1);
+  }
+
+  const { rows } = await pool.query('SELECT id, email, is_admin FROM users WHERE email = $1', [args.email]);
+  if (!rows.length) {
+    console.error(`No user with email ${args.email}`);
+    process.exit(1);
+  }
+  const user = rows[0];
+  const did = [];
+
+  if (args.password) {
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [
+      await hashPassword(String(args.password)),
+      user.id,
+    ]);
+    did.push('password reset');
+  }
+
+  if (args.resetTotp) {
+    // Deleting the row forces re-enrollment on next login.
+    await pool.query('DELETE FROM totp_secrets WHERE user_id = $1', [user.id]);
+    did.push('TOTP cleared (user must re-enroll)');
+  }
+
+  if (args.makeAdmin || args.removeAdmin) {
+    await pool.query('UPDATE users SET is_admin = $1 WHERE id = $2', [Boolean(args.makeAdmin), user.id]);
+    did.push(args.makeAdmin ? 'granted admin' : 'revoked admin');
+  }
+
+  if (args.password || args.resetTotp) {
+    await revokeAllTrustedDevices(user.id);
+    did.push('trusted devices revoked');
+  }
+
+  console.log(`\nUser ${user.email} (${user.id}):`);
+  console.log(did.length ? did.map((d) => `  - ${d}`).join('\n') : '  (no changes — pass an action flag)');
+  console.log('');
+  await pool.end();
+}
+
+main().catch(async (err) => {
+  console.error('reset-user failed:', err.message);
+  await pool.end().catch(() => {});
+  process.exit(1);
+});
+```
+
+### File: `server/src/account/routes.js`
+
+```javascript
+import { Router } from 'express';
+import { pool } from '../db.js';
+import { requireAuth } from '../auth/middleware.js';
+import { hashPassword, verifyPassword } from '../auth/password.js';
+import { revokeAllTrustedDevices, TRUSTED_DEVICE_COOKIE } from '../auth/trustedDevice.js';
+import { getSpend, deleteAccount } from './service.js';
+
+// /api/account — the Settings/account menu (Step 11): profile (email/password)
+// editing, the spend dashboard, and irreversible account deletion. Credits are
+// read via /api/keys/credits (already built); those are surfaced in the same UI.
+export const accountRouter = Router();
+
+accountRouter.use(requireAuth);
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD = 8;
+
+// Current profile basics. Email + password are the only user-editable fields the
+// schema carries (there's no display-name column), so "profile" is those two.
+accountRouter.get('/', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT email, is_admin, created_at FROM users WHERE id = $1',
+      [req.session.userId],
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Account not found' });
+    res.json({ email: rows[0].email, isAdmin: rows[0].is_admin, createdAt: rows[0].created_at });
+  } catch (err) {
+    console.error('[account] get failed:', err.message);
+    res.status(500).json({ error: 'Failed to load account' });
+  }
+});
+
+// PATCH /api/account/profile — change email and/or password. The current
+// password is required for either change (it's a sensitive operation). A
+// password change revokes every trusted device (bible) and clears this browser's
+// trusted-device cookie so TOTP is re-required on next login.
+accountRouter.patch('/profile', async (req, res) => {
+  const userId = req.session.userId;
+  const { currentPassword, email, newPassword } = req.body || {};
+
+  const { rows } = await pool.query('SELECT password_hash, email FROM users WHERE id = $1', [userId]);
+  if (!rows.length) return res.status(404).json({ error: 'Account not found' });
+
+  if (!currentPassword || !(await verifyPassword(rows[0].password_hash, String(currentPassword)))) {
+    return res.status(403).json({ error: 'Current password is incorrect.' });
+  }
+
+  const normEmail = email === undefined ? null : String(email).trim().toLowerCase();
+  const wantsEmail = normEmail !== null && normEmail !== rows[0].email;
+  const wantsPassword = newPassword !== undefined && String(newPassword) !== '';
+  if (!wantsEmail && !wantsPassword) {
+    return res.status(400).json({ error: 'Nothing to change — enter a new email or password.' });
+  }
+
+  const sets = [];
+  const vals = [];
+  let i = 1;
+
+  if (wantsEmail) {
+    if (!EMAIL_RE.test(normEmail)) return res.status(400).json({ error: 'Invalid email address.' });
+    sets.push(`email = $${i++}`);
+    vals.push(normEmail);
+  }
+  if (wantsPassword) {
+    if (String(newPassword).length < MIN_PASSWORD) {
+      return res.status(400).json({ error: `Password must be at least ${MIN_PASSWORD} characters.` });
+    }
+    sets.push(`password_hash = $${i++}`);
+    vals.push(await hashPassword(String(newPassword)));
+  }
+  vals.push(userId);
+
+  let updated;
+  try {
+    const r = await pool.query(
+      `UPDATE users SET ${sets.join(', ')} WHERE id = $${i} RETURNING email, is_admin`,
+      vals,
+    );
+    updated = r.rows[0];
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'That email is already in use.' });
+    console.error('[account] profile update failed:', err.message);
+    return res.status(500).json({ error: 'Failed to update profile' });
+  }
+
+  if (wantsPassword) {
+    await revokeAllTrustedDevices(userId);
+    res.clearCookie(TRUSTED_DEVICE_COOKIE, { path: '/' });
+  }
+
+  res.json({
+    email: updated.email,
+    isAdmin: updated.is_admin,
+    emailChanged: wantsEmail,
+    passwordChanged: wantsPassword,
+  });
+});
+
+// GET /api/account/spend — total (all-time + this month) and by-model/by-chat
+// breakdowns over the stored messages.cost_usd.
+accountRouter.get('/spend', async (req, res) => {
+  try {
+    res.json(await getSpend(req.session.userId));
+  } catch (err) {
+    console.error('[account] spend failed:', err.message);
+    res.status(500).json({ error: 'Failed to load spend' });
+  }
+});
+
+// DELETE /api/account — irreversible. Requires the current password as the
+// explicit confirmation gate (the client also requires a typed confirmation).
+// Removes all local + DB records; cloud-folder files are left untouched.
+accountRouter.delete('/', async (req, res) => {
+  const userId = req.session.userId;
+  const { currentPassword } = req.body || {};
+
+  const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+  if (!rows.length) return res.status(404).json({ error: 'Account not found' });
+  if (!currentPassword || !(await verifyPassword(rows[0].password_hash, String(currentPassword)))) {
+    return res.status(403).json({ error: 'Current password is incorrect.' });
+  }
+
+  try {
+    await deleteAccount(userId);
+  } catch (err) {
+    console.error('[account] delete failed:', err.message);
+    return res.status(500).json({ error: 'Failed to delete account.' });
+  }
+
+  // Tear down the current session + cookies (the session row is already gone).
+  res.clearCookie(TRUSTED_DEVICE_COOKIE, { path: '/' });
+  req.session.destroy(() => {
+    res.clearCookie('mmchat.sid', { path: '/' });
+    res.json({ ok: true });
+  });
+});
+```
+
+### File: `server/src/account/service.js`
+
+```javascript
+import { pool } from '../db.js';
+import { disconnectAccount } from '../storage/accounts.js';
+import { deleteUserStorageDir } from '../storage/local.js';
+
+// Account-level operations for the Settings menu (Step 11): the spend dashboard
+// (aggregation over messages.cost_usd, which is already computed + stored at
+// generation time across text/image/video) and irreversible account deletion.
+
+// Spend dashboard data: total (all-time + this calendar month) and the same
+// numbers grouped by model and by chat. cost_usd is numeric(12,6); cast to
+// float8 so it arrives as a JS number rather than a string. Only assistant/
+// output rows carry a cost, so the IS NOT NULL filter scopes to those.
+export async function getSpend(userId) {
+  const totals = await pool.query(
+    `SELECT
+        COALESCE(SUM(m.cost_usd), 0)::float8 AS all_time,
+        COALESCE(SUM(m.cost_usd) FILTER (WHERE m.created_at >= date_trunc('month', now())), 0)::float8 AS this_month,
+        COUNT(*)::int AS count
+       FROM messages m
+       JOIN chats c ON c.id = m.chat_id
+      WHERE c.user_id = $1 AND m.cost_usd IS NOT NULL`,
+    [userId],
+  );
+
+  // Model id lives in the assistant row's metadata (set on every generated turn);
+  // fall back to the chat's model_id, then a label so nothing gets dropped.
+  const byModel = await pool.query(
+    `SELECT COALESCE(m.metadata ->> 'model', c.model_id, '(unknown model)') AS model,
+            SUM(m.cost_usd)::float8 AS total,
+            COUNT(*)::int           AS count
+       FROM messages m
+       JOIN chats c ON c.id = m.chat_id
+      WHERE c.user_id = $1 AND m.cost_usd IS NOT NULL
+      GROUP BY 1
+      ORDER BY total DESC`,
+    [userId],
+  );
+
+  const byChat = await pool.query(
+    `SELECT c.id, c.title, c.modality,
+            SUM(m.cost_usd)::float8 AS total,
+            COUNT(*)::int           AS count
+       FROM messages m
+       JOIN chats c ON c.id = m.chat_id
+      WHERE c.user_id = $1 AND m.cost_usd IS NOT NULL
+      GROUP BY c.id, c.title, c.modality
+      ORDER BY total DESC`,
+    [userId],
+  );
+
+  return {
+    allTime: totals.rows[0].all_time,
+    thisMonth: totals.rows[0].this_month,
+    count: totals.rows[0].count,
+    byModel: byModel.rows.map((r) => ({ model: r.model, total: r.total, count: r.count })),
+    byChat: byChat.rows.map((r) => ({
+      id: r.id,
+      title: r.title || 'Untitled chat',
+      modality: r.modality,
+      total: r.total,
+      count: r.count,
+    })),
+  };
+}
+
+// Irreversible account deletion (bible: local + DB records only; files already
+// pushed to the user's own cloud folders are left untouched). Order matters:
+//  1. Best-effort revoke connected cloud providers at the provider AND drop the
+//     row — needs the still-present encrypted refresh token, so it runs first.
+//     The user's actual Drive files are NOT deleted (their data, their account).
+//  2. DELETE the users row — the FK cascade removes chats, messages, media_files,
+//     api_keys, totp_secrets, trusted_devices, and storage_accounts.
+//  3. Sessions aren't FK-linked to users (connect-pg-simple owns that table), so
+//     purge the user's sessions explicitly by the userId stashed in `sess`.
+//  4. Remove the user's local media directory from disk (after the rows are gone).
+export async function deleteAccount(userId) {
+  // Step 1 — revoke cloud tokens while they still exist. Only Google Drive is
+  // supported today; best-effort, never blocks deletion.
+  try {
+    await disconnectAccount(userId, 'google_drive');
+  } catch {
+    /* best effort — a failed revoke must not block account deletion */
+  }
+
+  // Step 2 — cascade-delete all of the user's DB records.
+  await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+
+  // Step 3 — purge session rows for this user (no FK to cascade through).
+  await pool.query(`DELETE FROM sessions WHERE (sess ->> 'userId') = $1`, [String(userId)]);
+
+  // Step 4 — remove local media from disk. DB is already authoritative-empty, so
+  // a failure here only leaves harmless orphan bytes (cleanable via the sweep).
+  await deleteUserStorageDir(userId);
+}
+```
+
+### File: `server/src/auth/invites.js`
+
+```javascript
+import { pool } from '../db.js';
+import { randomToken, sha256 } from '../crypto/tokens.js';
+
+// Admin-issued, single-use invite tokens. The raw token is shown once to the
+// admin (out-of-band delivery); only its hash is stored. Consuming an invite
+// is the only way to create an account (no self-service signup).
+
+// Create an invite. createdByUserId is null for the bootstrap CLI (no admin
+// exists yet). Returns the raw token — the only time it's visible.
+export async function createInvite({ createdByUserId = null, isAdmin = false, expiresInHours = 72 }) {
+  const raw = randomToken(24);
+  const tokenHash = sha256(raw);
+  const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
+  const { rows } = await pool.query(
+    `INSERT INTO invite_tokens (token_hash, created_by_user_id, is_admin, expires_at)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, expires_at, is_admin`,
+    [tokenHash, createdByUserId, isAdmin, expiresAt],
+  );
+  return { raw, ...rows[0] };
+}
+
+// Look up a usable invite by its raw token (unused + unexpired). Read-only.
+export async function findUsableInvite(rawToken) {
+  if (!rawToken) return null;
+  const { rows } = await pool.query(
+    `SELECT id, is_admin, expires_at, used_at
+       FROM invite_tokens
+      WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`,
+    [sha256(rawToken)],
+  );
+  return rows[0] || null;
+}
+```
+
+### File: `server/src/auth/middleware.js`
+
+```javascript
+import rateLimit from 'express-rate-limit';
+import { config } from '../config.js';
+
+// A session is only "fully authenticated" once both the password step AND the
+// TOTP step (or a trusted-device skip) have completed. Half-states:
+//   - totpPending: password ok, awaiting TOTP challenge
+//   - enrollmentPending: registering, awaiting TOTP enrollment confirmation
+
+export function isFullyAuthed(req) {
+  return Boolean(req.session?.userId && req.session?.totpVerified);
+}
+
+export function requireAuth(req, res, next) {
+  if (!isFullyAuthed(req)) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  next();
+}
+
+export function requireAdmin(req, res, next) {
+  if (!isFullyAuthed(req)) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  if (!req.session.isAdmin) {
+    return res.status(403).json({ error: 'Admin privileges required' });
+  }
+  next();
+}
+
+// Defense-in-depth CSRF check on state-changing requests. The session +
+// trusted-device cookies are SameSite=Lax, so browsers already withhold them
+// on cross-site POST/fetch; this additionally validates the Origin header when
+// present. Same-origin XHR from the SPA always sends a matching Origin.
+export function csrfOriginCheck(req, res, next) {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const origin = req.get('origin');
+  if (origin && !config.corsOrigin.includes(origin)) {
+    return res.status(403).json({ error: 'Cross-origin request blocked' });
+  }
+  next();
+}
+
+// Rate limiters for auth endpoints (security checklist). NOTE: the default
+// store is in-process memory — fine for a single process, but under PM2
+// cluster mode this must be swapped for a Postgres/Redis-backed store so the
+// count is shared across workers.
+const limiterOpts = {
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts, please wait and try again.' },
+};
+
+export const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20, // password + TOTP attempts per IP per window
+  ...limiterOpts,
+});
+
+export const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 15,
+  ...limiterOpts,
+});
+```
+
+### File: `server/src/auth/password.js`
+
+```javascript
+import { hash, verify } from '@node-rs/argon2';
+
+// Argon2id password hashing. @node-rs/argon2 ships prebuilt binaries (no
+// node-gyp build), and uses safe argon2id defaults.
+
+export function hashPassword(plaintext) {
+  return hash(plaintext);
+}
+
+export async function verifyPassword(storedHash, plaintext) {
+  try {
+    return await verify(storedHash, plaintext);
+  } catch {
+    // Malformed hash or verify error → treat as a failed match, never throw.
+    return false;
+  }
+}
+```
+
+### File: `server/src/auth/routes.js`
+
+```javascript
+import { Router } from 'express';
+import { pool } from '../db.js';
+import { hashPassword, verifyPassword } from './password.js';
+import { generateEnrollment, encryptSecret, verifyCode, qrDataUrl } from './totp.js';
+import { sha256, timingSafeEqualHex, generateBackupCodes } from '../crypto/tokens.js';
+import { createInvite, findUsableInvite } from './invites.js';
+import {
+  issueTrustedDevice,
+  isTrustedDevice,
+  revokeTrustedDeviceByToken,
+  TRUSTED_DEVICE_COOKIE,
+  cookieOptions,
+} from './trustedDevice.js';
+import {
+  requireAdmin,
+  loginLimiter,
+  registerLimiter,
+} from './middleware.js';
+
+export const authRouter = Router();
+
+// ── helpers ──────────────────────────────────────────────────────────────
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD = 8;
+
+const regenerate = (req) => new Promise((res, rej) => req.session.regenerate((e) => (e ? rej(e) : res())));
+
+function uaLabel(req) {
+  return (req.get('user-agent') || '').slice(0, 200) || null;
+}
+
+function publicUser(row) {
+  return { id: row.id, email: row.email, isAdmin: row.is_admin };
+}
+
+// ── registration (invite → account + TOTP enrollment) ─────────────────────
+
+// Step A: validate invite, create the account + (unverified) TOTP secret,
+// consume the invite, and return the QR + one-time backup codes.
+authRouter.post('/register/start', registerLimiter, async (req, res) => {
+  const { token, email, password } = req.body || {};
+  if (!token || !email || !password) {
+    return res.status(400).json({ error: 'token, email and password are required' });
+  }
+  const normEmail = String(email).trim().toLowerCase();
+  if (!EMAIL_RE.test(normEmail)) {
+    return res.status(400).json({ error: 'Invalid email address' });
+  }
+  if (String(password).length < MIN_PASSWORD) {
+    return res.status(400).json({ error: `Password must be at least ${MIN_PASSWORD} characters` });
+  }
+
+  const invite = await findUsableInvite(token);
+  if (!invite) {
+    return res.status(400).json({ error: 'Invalid or expired invite token' });
+  }
+
+  const passwordHash = await hashPassword(String(password));
+  const { secret, otpauthUrl } = generateEnrollment(normEmail);
+  const backupCodes = generateBackupCodes(10);
+  const hashedCodes = backupCodes.map((c) => sha256(c));
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Existing account with this email?
+    const existing = await client.query(
+      `SELECT u.id, t.verified_at
+         FROM users u LEFT JOIN totp_secrets t ON t.user_id = u.id
+        WHERE u.email = $1`,
+      [normEmail],
+    );
+    if (existing.rows.length) {
+      if (existing.rows[0].verified_at) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Email already registered' });
+      }
+      // Abandoned enrollment — clear it and start fresh (cascade drops totp).
+      await client.query('DELETE FROM users WHERE id = $1', [existing.rows[0].id]);
+    }
+
+    // Re-check the invite inside the transaction and consume it atomically.
+    const consumed = await client.query(
+      `UPDATE invite_tokens SET used_at = now()
+        WHERE id = $1 AND used_at IS NULL AND expires_at > now()
+        RETURNING id`,
+      [invite.id],
+    );
+    if (!consumed.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Invalid or expired invite token' });
+    }
+
+    const inserted = await client.query(
+      `INSERT INTO users (email, password_hash, is_admin)
+       VALUES ($1, $2, $3) RETURNING id, email, is_admin`,
+      [normEmail, passwordHash, invite.is_admin],
+    );
+    const user = inserted.rows[0];
+
+    await client.query(
+      `INSERT INTO totp_secrets (user_id, secret, backup_codes, verified_at)
+       VALUES ($1, $2, $3::jsonb, NULL)`,
+      [user.id, encryptSecret(secret), JSON.stringify(hashedCodes)],
+    );
+
+    await client.query('COMMIT');
+
+    // Half-authenticated session: awaiting TOTP enrollment confirmation.
+    await regenerate(req);
+    req.session.userId = user.id;
+    req.session.isAdmin = user.is_admin;
+    req.session.totpVerified = false;
+    req.session.enrollmentPending = true;
+
+    const qr = await qrDataUrl(otpauthUrl);
+    return res.json({
+      enrollment: {
+        qrDataUrl: qr,
+        otpauthUrl,
+        secret, // shown for manual entry into the authenticator app
+        backupCodes, // shown ONCE, in plaintext, right here
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[auth] register/start failed:', err.message);
+    return res.status(500).json({ error: 'Registration failed' });
+  } finally {
+    client.release();
+  }
+});
+
+// (Re)enrollment for an account that has a password but no verified TOTP —
+// used by the recovery flow (login → enrollmentIncomplete → enroll → verify)
+// after an admin clears a locked-out user's TOTP. Generates a fresh secret +
+// backup codes, replacing any unverified prior secret.
+authRouter.post('/register/enroll', registerLimiter, async (req, res) => {
+  if (!req.session?.enrollmentPending || !req.session?.userId) {
+    return res.status(400).json({ error: 'No enrollment in progress' });
+  }
+  const u = await pool.query('SELECT email FROM users WHERE id = $1', [req.session.userId]);
+  if (!u.rows.length) return res.status(400).json({ error: 'No enrollment in progress' });
+
+  const { secret, otpauthUrl } = generateEnrollment(u.rows[0].email);
+  const backupCodes = generateBackupCodes(10);
+  const hashedCodes = backupCodes.map((c) => sha256(c));
+
+  await pool.query(
+    `INSERT INTO totp_secrets (user_id, secret, backup_codes, verified_at)
+     VALUES ($1, $2, $3::jsonb, NULL)
+     ON CONFLICT (user_id)
+     DO UPDATE SET secret = EXCLUDED.secret, backup_codes = EXCLUDED.backup_codes, verified_at = NULL`,
+    [req.session.userId, encryptSecret(secret), JSON.stringify(hashedCodes)],
+  );
+
+  const qr = await qrDataUrl(otpauthUrl);
+  return res.json({ enrollment: { qrDataUrl: qr, otpauthUrl, secret, backupCodes } });
+});
+
+// Step B: confirm enrollment by entering a TOTP code from the app.
+authRouter.post('/register/verify', registerLimiter, async (req, res) => {
+  if (!req.session?.enrollmentPending || !req.session?.userId) {
+    return res.status(400).json({ error: 'No enrollment in progress' });
+  }
+  const { code } = req.body || {};
+  const { rows } = await pool.query(
+    'SELECT secret FROM totp_secrets WHERE user_id = $1',
+    [req.session.userId],
+  );
+  if (!rows.length || !verifyCode(code, rows[0].secret)) {
+    return res.status(400).json({ error: 'Invalid authentication code' });
+  }
+
+  const userId = req.session.userId;
+  const isAdmin = req.session.isAdmin;
+  await pool.query('UPDATE totp_secrets SET verified_at = now() WHERE user_id = $1', [userId]);
+
+  await regenerate(req);
+  req.session.userId = userId;
+  req.session.isAdmin = isAdmin;
+  req.session.totpVerified = true;
+
+  // A freshly-enrolled device is trusted.
+  const { raw } = await issueTrustedDevice(userId, uaLabel(req));
+  res.cookie(TRUSTED_DEVICE_COOKIE, raw, cookieOptions());
+
+  const u = await pool.query('SELECT id, email, is_admin FROM users WHERE id = $1', [userId]);
+  return res.json({ user: publicUser(u.rows[0]) });
+});
+
+// ── login (password → TOTP unless trusted device) ─────────────────────────
+authRouter.post('/login', loginLimiter, async (req, res) => {
+  const { email, password } = req.body || {};
+  const normEmail = String(email || '').trim().toLowerCase();
+  const generic = { error: 'Invalid email or password' };
+
+  const { rows } = await pool.query(
+    `SELECT u.id, u.email, u.password_hash, u.is_admin, t.verified_at
+       FROM users u LEFT JOIN totp_secrets t ON t.user_id = u.id
+      WHERE u.email = $1`,
+    [normEmail],
+  );
+  const user = rows[0];
+  if (!user || !(await verifyPassword(user.password_hash, String(password || '')))) {
+    return res.status(401).json(generic);
+  }
+
+  // Incomplete TOTP enrollment — send them back to finish it.
+  if (!user.verified_at) {
+    await regenerate(req);
+    req.session.userId = user.id;
+    req.session.isAdmin = user.is_admin;
+    req.session.totpVerified = false;
+    req.session.enrollmentPending = true;
+    return res.json({ enrollmentIncomplete: true });
+  }
+
+  // Trusted device? Skip TOTP.
+  const rawTd = req.signedCookies?.[TRUSTED_DEVICE_COOKIE];
+  if (await isTrustedDevice(user.id, rawTd)) {
+    await regenerate(req);
+    req.session.userId = user.id;
+    req.session.isAdmin = user.is_admin;
+    req.session.totpVerified = true;
+    return res.json({ user: publicUser(user), totpRequired: false });
+  }
+
+  // Otherwise: password ok, hold in a TOTP-pending state.
+  await regenerate(req);
+  req.session.userId = user.id;
+  req.session.isAdmin = user.is_admin;
+  req.session.totpVerified = false;
+  req.session.totpPending = true;
+  return res.json({ totpRequired: true });
+});
+
+// Second factor: a TOTP code or a one-time backup code.
+authRouter.post('/login/totp', loginLimiter, async (req, res) => {
+  if (!req.session?.totpPending || !req.session?.userId) {
+    return res.status(400).json({ error: 'No login in progress' });
+  }
+  const { code, rememberDevice } = req.body || {};
+  const userId = req.session.userId;
+
+  const { rows } = await pool.query(
+    'SELECT secret, backup_codes FROM totp_secrets WHERE user_id = $1',
+    [userId],
+  );
+  if (!rows.length) return res.status(400).json({ error: 'Invalid authentication code' });
+
+  let ok = verifyCode(code, rows[0].secret);
+
+  // Fall back to a one-time backup code.
+  if (!ok) {
+    const submitted = sha256(String(code || '').trim());
+    const stored = rows[0].backup_codes || [];
+    const idx = stored.findIndex((h) => timingSafeEqualHex(h, submitted));
+    if (idx !== -1) {
+      const remaining = stored.filter((_, i) => i !== idx);
+      await pool.query(
+        'UPDATE totp_secrets SET backup_codes = $1::jsonb WHERE user_id = $2',
+        [JSON.stringify(remaining), userId],
+      );
+      ok = true;
+    }
+  }
+
+  if (!ok) return res.status(400).json({ error: 'Invalid authentication code' });
+
+  const isAdmin = req.session.isAdmin;
+  await regenerate(req);
+  req.session.userId = userId;
+  req.session.isAdmin = isAdmin;
+  req.session.totpVerified = true;
+
+  if (rememberDevice) {
+    const { raw } = await issueTrustedDevice(userId, uaLabel(req));
+    res.cookie(TRUSTED_DEVICE_COOKIE, raw, cookieOptions());
+  }
+
+  const u = await pool.query('SELECT id, email, is_admin FROM users WHERE id = $1', [userId]);
+  return res.json({ user: publicUser(u.rows[0]) });
+});
+
+// ── session ────────────────────────────────────────────────────────────────
+authRouter.get('/me', async (req, res) => {
+  if (!req.session?.userId || !req.session?.totpVerified) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  const { rows } = await pool.query('SELECT id, email, is_admin FROM users WHERE id = $1', [
+    req.session.userId,
+  ]);
+  if (!rows.length) return res.status(401).json({ error: 'Not authenticated' });
+  return res.json({ user: publicUser(rows[0]) });
+});
+
+authRouter.post('/logout', async (req, res) => {
+  // Revoke this browser's trusted device on explicit logout, and clear cookie.
+  await revokeTrustedDeviceByToken(req.signedCookies?.[TRUSTED_DEVICE_COOKIE]);
+  res.clearCookie(TRUSTED_DEVICE_COOKIE, { path: '/' });
+  req.session.destroy(() => {
+    res.clearCookie('mmchat.sid', { path: '/' });
+    res.json({ ok: true });
+  });
+});
+
+// ── admin: issue invite tokens ─────────────────────────────────────────────
+authRouter.post('/invites', requireAdmin, async (req, res) => {
+  const { isAdmin = false, expiresInHours = 72 } = req.body || {};
+  const invite = await createInvite({
+    createdByUserId: req.session.userId,
+    isAdmin: Boolean(isAdmin),
+    expiresInHours: Math.min(Math.max(Number(expiresInHours) || 72, 1), 24 * 30),
+  });
+  return res.json({
+    token: invite.raw,
+    isAdmin: invite.is_admin,
+    expiresAt: invite.expires_at,
+    signupPath: `/register?token=${encodeURIComponent(invite.raw)}`,
+  });
+});
+```
+
+### File: `server/src/auth/totp.js`
+
+```javascript
+import { authenticator } from 'otplib';
+import QRCode from 'qrcode';
+import { encrypt, decrypt } from '../crypto/encryption.js';
+
+// TOTP second factor. Secrets are stored encrypted (AES-256-GCM) because,
+// unlike a password, the server must recover the plaintext secret to verify
+// codes — so it can't be one-way hashed.
+
+const SERVICE = 'mmchat';
+
+// Allow ±1 time step (±30s) of clock drift when verifying.
+authenticator.options = { window: 1 };
+
+// Create a fresh secret + the otpauth:// URL used to build the enrollment QR.
+export function generateEnrollment(email) {
+  const secret = authenticator.generateSecret();
+  const otpauthUrl = authenticator.keyuri(email, SERVICE, secret);
+  return { secret, otpauthUrl };
+}
+
+export const encryptSecret = (secret) => encrypt(secret);
+
+// Verify a 6-digit code against an encrypted secret.
+export function verifyCode(code, encryptedSecret) {
+  if (!/^\d{6}$/.test(String(code || '').trim())) return false;
+  const secret = decrypt(encryptedSecret);
+  return authenticator.check(String(code).trim(), secret);
+}
+
+export function qrDataUrl(otpauthUrl) {
+  return QRCode.toDataURL(otpauthUrl);
+}
+```
+
+### File: `server/src/auth/trustedDevice.js`
+
+```javascript
+import { pool } from '../db.js';
+import { config } from '../config.js';
+import { randomToken, sha256 } from '../crypto/tokens.js';
+
+// Trusted-device tokens let a specific browser skip the TOTP challenge for
+// `trustedDeviceDays`. The raw token lives only in a signed httpOnly cookie;
+// the server stores just its SHA-256 hash, so it can be individually revoked
+// (settings) or bulk-invalidated (password change, admin reset).
+
+export const TRUSTED_DEVICE_COOKIE = 'td';
+
+// Persist a new trusted device and return the raw token to put in the cookie.
+export async function issueTrustedDevice(userId, userAgentLabel) {
+  const raw = randomToken(32);
+  const tokenHash = sha256(raw);
+  const expiresAt = new Date(Date.now() + config.trustedDeviceDays * 24 * 60 * 60 * 1000);
+  await pool.query(
+    `INSERT INTO trusted_devices (user_id, token_hash, expires_at, last_used_at, user_agent_label)
+     VALUES ($1, $2, $3, now(), $4)`,
+    [userId, tokenHash, expiresAt, userAgentLabel || null],
+  );
+  return { raw, expiresAt };
+}
+
+// Return true if the raw cookie token maps to a live trusted device for this
+// user; refreshes last_used_at as a side effect.
+export async function isTrustedDevice(userId, rawToken) {
+  if (!rawToken) return false;
+  const tokenHash = sha256(rawToken);
+  const { rows } = await pool.query(
+    `UPDATE trusted_devices
+        SET last_used_at = now()
+      WHERE user_id = $1 AND token_hash = $2 AND expires_at > now()
+      RETURNING id`,
+    [userId, tokenHash],
+  );
+  return rows.length > 0;
+}
+
+// Revoke a single device by its raw cookie token (e.g. on logout-this-device).
+export async function revokeTrustedDeviceByToken(rawToken) {
+  if (!rawToken) return;
+  await pool.query('DELETE FROM trusted_devices WHERE token_hash = $1', [sha256(rawToken)]);
+}
+
+// Revoke every trusted device for a user (password change / admin reset).
+export async function revokeAllTrustedDevices(userId) {
+  await pool.query('DELETE FROM trusted_devices WHERE user_id = $1', [userId]);
+}
+
+export function cookieOptions() {
+  return {
+    httpOnly: true,
+    secure: config.cookieSecure,
+    sameSite: 'lax',
+    signed: true,
+    maxAge: config.trustedDeviceDays * 24 * 60 * 60 * 1000,
+    path: '/',
+  };
+}
+```
+
+### File: `server/src/chats/completion.js`
+
+```javascript
+import { pool } from '../db.js';
+import { config } from '../config.js';
+import { getDecryptedKey } from '../keys/service.js';
+import {
+  chatCompletionStream,
+  classifyError,
+  errorMessage,
+  modelSupportsImageInput,
+} from '../openrouter/client.js';
+import { writeInputFile, deleteRef, isSupportedImage, contentTypeFor } from '../storage/local.js';
+
+// SSE helpers ────────────────────────────────────────────────────────────────
+function sse(res, obj) {
+  res.write(`data: ${JSON.stringify(obj)}\n\n`);
+}
+
+// Build the provider-routing object from the UI toggles.
+//   sort:    'price' (default) | 'speed'  -> provider.sort price|throughput
+//   privacy: true                          -> provider.data_collection deny
+function buildProvider({ sort, privacy }) {
+  return {
+    sort: sort === 'speed' ? 'throughput' : 'price',
+    data_collection: truthy(privacy) ? 'deny' : 'allow',
+  };
+}
+
+// FormData sends everything as strings ('true'/'false'); JSON sends booleans.
+function truthy(v) {
+  return v === true || v === 'true';
+}
+
+export async function loadOwnedChat(chatId, userId) {
+  const { rows } = await pool.query(
+    `SELECT id, title, model_id, modality FROM chats WHERE id = $1 AND user_id = $2`,
+    [chatId, userId],
+  );
+  return rows[0] || null;
+}
+
+export function mediaView(m) {
+  return {
+    id: m.id,
+    direction: m.direction,
+    sizeBytes: Number(m.size_bytes),
+    contentType: m.content_type || (m.file_ref ? contentTypeFor(m.file_ref) : undefined),
+    storageLocation: m.storage_location,
+    // Cloud file the user deleted on the provider side (out-of-band). The client
+    // renders a "no longer in your cloud storage" placeholder instead of fetching.
+    unavailable: Boolean(m.unavailable_at),
+    url: `/api/media/${m.id}`,
+  };
+}
+
+// GET /api/chats/:id/messages — the persisted thread, with input attachments.
+export async function listMessages(req, res) {
+  try {
+    const chat = await loadOwnedChat(req.params.id, req.session.userId);
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+    const { rows } = await pool.query(
+      `SELECT id, role, content, content_type, cost_usd, created_at,
+              metadata ->> 'status' AS status
+         FROM messages WHERE chat_id = $1
+        ORDER BY created_at ASC, (role <> 'user') ASC`,
+      [chat.id],
+    );
+    const ids = rows.map((m) => m.id);
+    const byMsg = new Map();
+    if (ids.length) {
+      const media = await pool.query(
+        `SELECT id, message_id, direction, size_bytes, file_ref,
+                content_type, storage_location, unavailable_at
+           FROM media_files WHERE message_id = ANY($1::uuid[]) ORDER BY created_at ASC`,
+        [ids],
+      );
+      for (const m of media.rows) {
+        if (!byMsg.has(m.message_id)) byMsg.set(m.message_id, []);
+        byMsg.get(m.message_id).push(mediaView(m));
+      }
+    }
+    res.json({
+      messages: rows.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        contentType: m.content_type,
+        costUsd: m.cost_usd,
+        status: m.status,
+        createdAt: m.created_at,
+        attachments: byMsg.get(m.id) || [],
+      })),
+    });
+  } catch (err) {
+    if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+    console.error('[messages] list failed:', err.message);
+    res.status(500).json({ error: 'Failed to load messages' });
+  }
+}
+
+// Persist attachments for a just-created user message: write each file to local
+// storage, insert media_files (direction 'input'), and bump the user's
+// storage_used_bytes counter — all under one transaction. On failure, unlink
+// any files already written. Returns the created media rows (for the response).
+export async function persistAttachments(userId, messageId, files) {
+  const written = [];
+  try {
+    for (const f of files) {
+      const { fileRef, sizeBytes } = await writeInputFile(userId, f);
+      written.push({ fileRef, sizeBytes, contentType: f.mimetype });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const created = [];
+      for (const w of written) {
+        const { rows } = await client.query(
+          `INSERT INTO media_files (message_id, direction, storage_location, file_ref, size_bytes, content_type)
+           VALUES ($1, 'input', 'local', $2, $3, $4)
+           RETURNING id, direction, size_bytes, storage_location, content_type, unavailable_at`,
+          [messageId, w.fileRef, w.sizeBytes, w.contentType],
+        );
+        created.push(rows[0]);
+      }
+      const total = written.reduce((n, w) => n + w.sizeBytes, 0);
+      const { rows: u } = await client.query(
+        `UPDATE users SET storage_used_bytes = storage_used_bytes + $1
+          WHERE id = $2 RETURNING storage_used_bytes`,
+        [total, userId],
+      );
+      await client.query('COMMIT');
+      return { created, storageUsed: Number(u[0].storage_used_bytes) };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    await Promise.all(written.map((w) => deleteRef(w.fileRef)));
+    throw err;
+  }
+}
+
+// POST /api/chats/:id/messages — persist the user turn (+ any image attachments),
+// call OpenRouter with streaming, relay tokens over SSE, then persist the reply.
+// Pre-flight problems come back as JSON with a `category`; once the stream
+// starts, later failures arrive as an SSE {type:'error'} event.
+export async function sendMessage(req, res) {
+  const userId = req.session.userId;
+  const { content, sort, privacy } = req.body || {};
+  const files = Array.isArray(req.files) ? req.files : [];
+
+  let chat;
+  try {
+    chat = await loadOwnedChat(req.params.id, userId);
+  } catch (err) {
+    if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+    throw err;
+  }
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+  const text = String(content || '').trim();
+  if (!text && !files.length) return res.status(400).json({ error: 'Message cannot be empty' });
+  if (chat.modality !== 'text') {
+    return res.status(400).json({ error: 'Only text chats can send messages yet.', category: 'model' });
+  }
+  if (!chat.model_id) {
+    return res.status(400).json({ error: 'Select a model first.', category: 'model' });
+  }
+
+  // Attachment validation (before writing anything).
+  if (files.length) {
+    const bad = files.find((f) => !isSupportedImage(f.mimetype));
+    if (bad) {
+      return res.status(400).json({
+        error: `Unsupported attachment type: ${bad.mimetype}. Attach an image (PNG, JPEG, WebP, GIF).`,
+        category: 'request',
+      });
+    }
+    let vision = false;
+    try { vision = await modelSupportsImageInput(chat.model_id); } catch { vision = false; }
+    if (!vision) {
+      return res.status(400).json({
+        error: 'This model does not accept image input. Choose a vision-capable model.',
+        category: 'model',
+      });
+    }
+    // Hard 5 GB cap.
+    const incoming = files.reduce((n, f) => n + f.size, 0);
+    const { rows: u } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
+    if (Number(u[0].storage_used_bytes) + incoming > config.maxLocalBytes) {
+      return res.status(400).json({
+        error: 'This upload would exceed your 5 GB local storage limit. Delete some media first.',
+        category: 'storage',
+      });
+    }
+  }
+
+  const key = await getDecryptedKey(userId);
+  if (!key) {
+    return res.status(400).json({
+      error: 'Add your OpenRouter API key in Settings before sending.',
+      category: 'key',
+    });
+  }
+
+  // History (text) BEFORE inserting the new turn.
+  const prior = await pool.query(
+    `SELECT role, content FROM messages
+      WHERE chat_id = $1 AND content IS NOT NULL AND role IN ('system','user','assistant')
+      ORDER BY created_at ASC`,
+    [chat.id],
+  );
+  const history = prior.rows.map((m) => ({ role: m.role, content: m.content }));
+
+  // Persist the user turn (text) so a reload shows it even if the call fails.
+  const userMsg = await pool.query(
+    `INSERT INTO messages (chat_id, role, content, content_type)
+     VALUES ($1, 'user', $2, 'text') RETURNING id, created_at`,
+    [chat.id, text || null],
+  );
+  const userMsgId = userMsg.rows[0].id;
+
+  // Write attachments + media rows.
+  let attachments = [];
+  let storageUsed = null;
+  if (files.length) {
+    try {
+      const r = await persistAttachments(userId, userMsgId, files);
+      attachments = r.created.map(mediaView);
+      storageUsed = r.storageUsed;
+    } catch (err) {
+      console.error('[messages] attachment persist failed:', err.message);
+      return res.status(500).json({ error: 'Failed to store the attachment.', category: 'request', userMessageId: userMsgId });
+    }
+  }
+
+  // Build the outgoing current turn: multimodal content when images present.
+  const currentContent = files.length
+    ? [
+        ...(text ? [{ type: 'text', text }] : []),
+        ...files.map((f) => ({
+          type: 'image_url',
+          image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString('base64')}` },
+        })),
+      ]
+    : text;
+  const messages = [...history, { role: 'user', content: currentContent }];
+
+  const controller = new AbortController();
+  req.on('close', () => controller.abort());
+
+  let orRes;
+  try {
+    orRes = await chatCompletionStream({
+      key,
+      model: chat.model_id,
+      messages,
+      provider: buildProvider({ sort, privacy }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    return res.status(502).json({
+      error: 'Could not reach OpenRouter. Check your connection and try again.',
+      category: 'model',
+    });
+  }
+
+  if (!orRes.ok) {
+    let orError = null;
+    try { orError = (await orRes.json())?.error; } catch { /* non-JSON body */ }
+    const category = classifyError(orRes.status, orError);
+    const message = errorMessage(orError, `OpenRouter returned HTTP ${orRes.status}.`);
+    const status = orRes.status >= 400 && orRes.status < 600 ? orRes.status : 502;
+    return res.status(status).json({ error: message, category, userMessageId: userMsgId });
+  }
+
+  // ── streaming path ──
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  sse(res, {
+    type: 'user',
+    id: userMsgId,
+    createdAt: userMsg.rows[0].created_at,
+    attachments,
+    storageUsed,
+    storageNotice: storageUsed != null && storageUsed >= config.noticeLocalBytes,
+  });
+
+  let assistant = '';
+  let usage = null;
+  let streamErr = null;
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let done = false;
+  const reader = orRes.body.getReader();
+
+  try {
+    while (!done) {
+      const { value, done: streamDone } = await reader.read();
+      if (streamDone) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nl).replace(/\r$/, '');
+        buffer = buffer.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') { done = true; break; }
+        let evt;
+        try { evt = JSON.parse(payload); } catch { continue; }
+        if (evt.error) { streamErr = evt.error; continue; }
+        const delta = evt.choices?.[0]?.delta?.content;
+        if (delta) {
+          assistant += delta;
+          sse(res, { type: 'delta', text: delta });
+        }
+        if (evt.usage) usage = evt.usage;
+      }
+    }
+  } catch (err) {
+    if (!controller.signal.aborted) streamErr = { message: err.message };
+  }
+
+  if (controller.signal.aborted) {
+    if (assistant) await persistAssistant(chat.id, assistant, usage, chat.model_id).catch(() => {});
+    return res.end();
+  }
+
+  if (streamErr) {
+    let savedId = null;
+    if (assistant) savedId = await persistAssistant(chat.id, assistant, usage, chat.model_id).catch(() => null);
+    sse(res, {
+      type: 'error',
+      category: classifyError(200, streamErr),
+      message: errorMessage(streamErr, 'The model stream ended unexpectedly.'),
+      messageId: savedId,
+    });
+    return res.end();
+  }
+
+  const saved = await persistAssistant(chat.id, assistant, usage, chat.model_id);
+  sse(res, { type: 'done', messageId: saved, cost: usage?.cost ?? null });
+  res.end();
+}
+
+async function persistAssistant(chatId, content, usage, modelId) {
+  const cost = usage && usage.cost != null ? usage.cost : null;
+  const { rows } = await pool.query(
+    `INSERT INTO messages (chat_id, role, content, content_type, cost_usd, metadata)
+     VALUES ($1, 'assistant', $2, 'text', $3, $4::jsonb) RETURNING id`,
+    [chatId, content, cost, JSON.stringify({ model: modelId, usage: usage || null })],
+  );
+  await pool.query('UPDATE chats SET updated_at = now() WHERE id = $1', [chatId]);
+  return rows[0].id;
+}
+```
+
+### File: `server/src/chats/imagegen.js`
+
+```javascript
+import { pool } from '../db.js';
+import { config } from '../config.js';
+import { getDecryptedKey } from '../keys/service.js';
+import {
+  generateImages,
+  extractImages,
+  modelImagePricing,
+  imageModelSupportsImageInput,
+  classifyError,
+  errorMessage,
+} from '../openrouter/client.js';
+import { resolveOutputTarget, persistGeneratedOutput } from '../storage/output.js';
+import { loadOwnedChat, mediaView, persistAttachments } from './completion.js';
+import { isSupportedImage } from '../storage/local.js';
+
+// Fetch the bytes for one normalized image ({ b64 } or { url }). OpenRouter
+// output URLs are NOT assumed durable, so we fetch immediately (bible:
+// output-persistence assumption).
+async function bytesFor(img) {
+  if (img.b64) {
+    return { buffer: Buffer.from(img.b64, 'base64'), mimetype: img.mime || 'image/png' };
+  }
+  if (img.url) {
+    const r = await fetch(img.url);
+    if (!r.ok) throw new Error(`Failed to fetch generated image (HTTP ${r.status})`);
+    const buffer = Buffer.from(await r.arrayBuffer());
+    const mimetype = (r.headers.get('content-type') || img.mime || 'image/png').split(';')[0];
+    return { buffer, mimetype };
+  }
+  throw new Error('No image data in response');
+}
+
+// Load a persisted assistant message + its attachments (for idempotent replays).
+async function messageWithAttachments(messageId) {
+  const { rows } = await pool.query(
+    `SELECT id, role, content, content_type, cost_usd FROM messages WHERE id = $1`,
+    [messageId],
+  );
+  if (!rows.length) return null;
+  const media = await pool.query(
+    `SELECT id, direction, size_bytes, file_ref, content_type, storage_location, unavailable_at
+       FROM media_files WHERE message_id = $1 ORDER BY created_at ASC`,
+    [messageId],
+  );
+  return {
+    id: rows[0].id,
+    role: rows[0].role,
+    content: rows[0].content,
+    contentType: rows[0].content_type,
+    costUsd: rows[0].cost_usd,
+    attachments: media.rows.map(mediaView),
+  };
+}
+
+// POST /api/chats/:id/images — generate an image from a prompt, store the bytes
+// locally as output media, and return the assistant message. Synchronous (the
+// Unified Image API returns the image directly), guarded against duplicate spend
+// by a per-chat pending lock (the partial unique index from migration 003).
+export async function generateImage(req, res) {
+  const userId = req.session.userId;
+  // multipart (JSON fields arrive as strings) when reference images are attached;
+  // plain JSON otherwise. req.files is populated by multer only for multipart.
+  const { prompt, idempotencyKey } = req.body || {};
+  const files = Array.isArray(req.files) ? req.files : [];
+
+  let chat;
+  try {
+    chat = await loadOwnedChat(req.params.id, userId);
+  } catch (err) {
+    if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+    throw err;
+  }
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+  const text = String(prompt || '').trim();
+  if (!text) return res.status(400).json({ error: 'A prompt is required.' });
+  if (chat.modality !== 'image') {
+    return res.status(400).json({ error: 'This chat is not an image chat.', category: 'model' });
+  }
+  if (!chat.model_id) {
+    return res.status(400).json({ error: 'Choose an image model first.', category: 'model' });
+  }
+
+  // Reference-image validation (before any spend or DB writes). Mirrors the text
+  // path: supported types only, model must accept image input, and input media
+  // counts against the local cap.
+  if (files.length) {
+    const bad = files.find((f) => !isSupportedImage(f.mimetype));
+    if (bad) {
+      return res.status(400).json({
+        error: `Unsupported attachment type: ${bad.mimetype}. Attach an image (PNG, JPEG, WebP, GIF).`,
+        category: 'request',
+      });
+    }
+    let acceptsImage = false;
+    try { acceptsImage = await imageModelSupportsImageInput(chat.model_id); } catch { acceptsImage = false; }
+    if (!acceptsImage) {
+      return res.status(400).json({
+        error: 'This image model does not accept a reference image. Choose one that supports image input.',
+        category: 'model',
+      });
+    }
+    const incoming = files.reduce((n, f) => n + f.size, 0);
+    const { rows: u } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
+    if (Number(u[0].storage_used_bytes) + incoming > config.maxLocalBytes) {
+      return res.status(400).json({
+        error: 'This upload would exceed your 5 GB local storage limit. Delete some media first.',
+        category: 'storage',
+      });
+    }
+  }
+
+  // Idempotent replay: same key already produced (or is producing) a result.
+  if (idempotencyKey) {
+    const existing = await pool.query(
+      `SELECT id, metadata ->> 'status' AS status FROM messages
+        WHERE chat_id = $1 AND role = 'assistant' AND metadata ->> 'idempotencyKey' = $2
+        LIMIT 1`,
+      [chat.id, String(idempotencyKey)],
+    );
+    if (existing.rows.length) {
+      if (existing.rows[0].status === 'pending') {
+        return res.status(409).json({ error: 'This generation is already in progress.', category: 'pending' });
+      }
+      return res.json({ message: await messageWithAttachments(existing.rows[0].id) });
+    }
+  }
+
+  const key = await getDecryptedKey(userId);
+  if (!key) {
+    return res.status(400).json({ error: 'Add your OpenRouter API key in Settings before generating.', category: 'key' });
+  }
+
+  // Pre-flight storage check: don't spend if we've no room to keep the result.
+  // Only applies when output lands on local disk — a linked cloud folder doesn't
+  // count against the 5 GB cap.
+  const target = await resolveOutputTarget(userId);
+  if (target.kind === 'local') {
+    const { rows: u0 } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
+    if (Number(u0[0].storage_used_bytes) >= config.maxLocalBytes) {
+      return res.status(400).json({ error: 'You are at your 5 GB local storage limit. Delete some media first.', category: 'storage' });
+    }
+  }
+
+  // Create the user prompt + a pending assistant row atomically. The partial
+  // unique index refuses a second pending row for this chat (duplicate-spend
+  // guard), surfaced as 409.
+  let userMsgId;
+  let assistantId;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // clock_timestamp() (not the default now(), which is the shared transaction
+    // timestamp) so the user turn sorts strictly before its assistant reply even
+    // though both are inserted in one transaction.
+    const um = await client.query(
+      `INSERT INTO messages (chat_id, role, content, content_type, created_at)
+       VALUES ($1, 'user', $2, 'text', clock_timestamp()) RETURNING id`,
+      [chat.id, text],
+    );
+    userMsgId = um.rows[0].id;
+    const am = await client.query(
+      `INSERT INTO messages (chat_id, role, content, content_type, metadata, created_at)
+       VALUES ($1, 'assistant', NULL, 'image', $2::jsonb, clock_timestamp()) RETURNING id`,
+      [chat.id, JSON.stringify({ status: 'pending', model: chat.model_id, idempotencyKey: idempotencyKey || null })],
+    );
+    assistantId = am.rows[0].id;
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'A generation is already in progress in this chat.', category: 'pending' });
+    }
+    console.error('[imagegen] setup failed:', err.message);
+    return res.status(500).json({ error: 'Failed to start generation.' });
+  }
+  client.release();
+
+  // Clean up the pending assistant row on any failure so the chat isn't stuck.
+  const fail = async (status, body) => {
+    await pool.query('DELETE FROM messages WHERE id = $1', [assistantId]).catch(() => {});
+    return res.status(status).json({ ...body, userMessageId: userMsgId });
+  };
+
+  // Persist reference images onto the user turn (input media: local + counted),
+  // then build the OpenRouter input_references payload from the same in-memory
+  // buffers. A persist failure aborts before any spend.
+  let userAttachments = [];
+  let inputReferences;
+  if (files.length) {
+    try {
+      const r = await persistAttachments(userId, userMsgId, files);
+      userAttachments = r.created.map(mediaView);
+    } catch (err) {
+      console.error('[imagegen] attachment persist failed:', err.message);
+      return fail(500, { error: 'Failed to store the reference image.', category: 'request' });
+    }
+    inputReferences = files.map((f) => ({
+      type: 'image_url',
+      image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString('base64')}` },
+    }));
+  }
+
+  let orRes;
+  try {
+    orRes = await generateImages({ key, model: chat.model_id, prompt: text, inputReferences });
+  } catch (err) {
+    console.error('[imagegen] OpenRouter request failed:', err?.message);
+    return fail(502, { error: 'Could not reach OpenRouter. Try again shortly.', category: 'model' });
+  }
+
+  if (!orRes.ok) {
+    let orError = null;
+    try { orError = (await orRes.json())?.error; } catch { /* non-JSON */ }
+    console.error(`[imagegen] OpenRouter ${orRes.status} for ${chat.model_id}${inputReferences ? ` (with ${inputReferences.length} reference image(s))` : ''}:`, errorMessage(orError, '(no message)'));
+    const status = orRes.status >= 400 && orRes.status < 600 ? orRes.status : 502;
+    return fail(status, { error: errorMessage(orError, `OpenRouter returned HTTP ${orRes.status}.`), category: classifyError(orRes.status, orError) });
+  }
+
+  let json;
+  try { json = await orRes.json(); } catch { return fail(502, { error: 'OpenRouter returned an unreadable response.', category: 'model' }); }
+
+  const images = extractImages(json);
+  if (!images.length) {
+    return fail(502, { error: 'The model returned no image.', category: 'model' });
+  }
+
+  // Fetch every returned image (URLs aren't assumed durable).
+  let buffers;
+  try {
+    buffers = [];
+    for (const img of images) buffers.push(await bytesFor(img));
+  } catch (err) {
+    console.error('[imagegen] fetch failed:', err.message);
+    return fail(502, { error: 'The image was generated but could not be saved. Please retry.', category: 'model' });
+  }
+
+  // Cost: prefer OpenRouter usage.cost. Only fall back to the catalogue price
+  // when it's actually billed per image — a per-megapixel rate can't be turned
+  // into a total without the output dimensions, so leave it null rather than wrong.
+  let cost = json?.usage?.cost ?? null;
+  if (cost == null) {
+    const pr = await modelImagePricing(chat.model_id).catch(() => null);
+    if (pr && (pr.unit === 'image' || pr.unit === 'images')) cost = pr.cost * buffers.length;
+  }
+
+  // Persist to the resolved target (cloud folder or local disk): media rows +
+  // cost + mark complete + (local-only) counter bump, atomically. Cleans up on
+  // failure.
+  try {
+    await persistGeneratedOutput({ userId, messageId: assistantId, chatId: chat.id, buffers, cost });
+  } catch (err) {
+    console.error('[imagegen] persist failed:', err.message);
+    return fail(500, { error: 'The image was generated but could not be saved. Please retry.', category: 'request' });
+  }
+
+  return res.json({
+    userMessageId: userMsgId,
+    userAttachments,
+    message: await messageWithAttachments(assistantId),
+  });
+}
+```
+
+### File: `server/src/chats/routes.js`
+
+```javascript
+import { Router } from 'express';
+import multer from 'multer';
+import { pool } from '../db.js';
+import { config } from '../config.js';
+import { requireAuth } from '../auth/middleware.js';
+import { listMessages, sendMessage } from './completion.js';
+import { generateImage } from './imagegen.js';
+import { submitVideoJob, reconcileVideos } from './videogen.js';
+import { deleteChatAndReleaseMedia } from '../storage/accounting.js';
+
+// Attachments are held in memory (small images) so we can both base64-embed them
+// in the OpenRouter request and write them to local storage. multer only parses
+// multipart requests; plain-JSON sends pass straight through.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: config.maxUploadBytes, files: config.maxAttachments },
+});
+
+function uploadAttachments(req, res, next) {
+  upload.array('files', config.maxAttachments)(req, res, (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE'
+        ? 'An attachment is too large (max 20 MB each).'
+        : err.code === 'LIMIT_FILE_COUNT'
+          ? 'Too many attachments.'
+          : 'Upload failed.';
+      return res.status(400).json({ error: msg, category: 'request' });
+    }
+    next();
+  });
+}
+
+// /api/chats — chat CRUD. A chat is a container (title, model_id, modality) with
+// its own message thread; Step 2 creates/renames/deletes chats but wires up no
+// real model calls, so a chat can exist with zero messages. Every query is
+// scoped to req.session.userId — a user can only see/touch their own chats.
+export const chatsRouter = Router();
+
+chatsRouter.use(requireAuth);
+
+const MODALITIES = ['text', 'image', 'video'];
+const TITLE_MAX = 200;
+const MODEL_ID_MAX = 200;
+
+function publicChat(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    modelId: row.model_id,
+    modality: row.modality,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function cleanTitle(v) {
+  if (v === undefined || v === null) return null;
+  const t = String(v).trim().slice(0, TITLE_MAX);
+  return t.length ? t : null;
+}
+
+function cleanModelId(v) {
+  if (v === undefined || v === null) return null;
+  const t = String(v).trim().slice(0, MODEL_ID_MAX);
+  return t.length ? t : null;
+}
+
+// List the user's chats, most-recently-updated first.
+chatsRouter.get('/', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, title, model_id, modality, created_at, updated_at
+         FROM chats WHERE user_id = $1
+        ORDER BY updated_at DESC`,
+      [req.session.userId],
+    );
+    res.json({ chats: rows.map(publicChat) });
+  } catch (err) {
+    console.error('[chats] list failed:', err.message);
+    res.status(500).json({ error: 'Failed to load chats' });
+  }
+});
+
+// Create a chat. modality defaults to 'text'; title/model_id optional.
+chatsRouter.post('/', async (req, res) => {
+  const { title, modelId, modality = 'text' } = req.body || {};
+  if (!MODALITIES.includes(modality)) {
+    return res.status(400).json({ error: `modality must be one of: ${MODALITIES.join(', ')}` });
+  }
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO chats (user_id, title, model_id, modality)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, title, model_id, modality, created_at, updated_at`,
+      [req.session.userId, cleanTitle(title) ?? 'New chat', cleanModelId(modelId), modality],
+    );
+    res.status(201).json({ chat: publicChat(rows[0]) });
+  } catch (err) {
+    console.error('[chats] create failed:', err.message);
+    res.status(500).json({ error: 'Failed to create chat' });
+  }
+});
+
+// Fetch a single chat (owner only).
+chatsRouter.get('/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, title, model_id, modality, created_at, updated_at
+         FROM chats WHERE id = $1 AND user_id = $2`,
+      [req.params.id, req.session.userId],
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Chat not found' });
+    res.json({ chat: publicChat(rows[0]) });
+  } catch (err) {
+    // Invalid UUID etc. — treat as not found rather than a 500.
+    if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+    console.error('[chats] get failed:', err.message);
+    res.status(500).json({ error: 'Failed to load chat' });
+  }
+});
+
+// Update title / model_id / modality. Only provided fields change.
+chatsRouter.patch('/:id', async (req, res) => {
+  const body = req.body || {};
+  const sets = [];
+  const vals = [];
+  let i = 1;
+
+  if ('title' in body) {
+    sets.push(`title = $${i++}`);
+    vals.push(cleanTitle(body.title));
+  }
+  if ('modelId' in body) {
+    // The model is fixed once a chat has a thread — the history belongs to the
+    // model that produced it. Allow the initial pick (no messages yet) and
+    // idempotent same-value writes; reject an actual change afterward.
+    try {
+      const { rows: info } = await pool.query(
+        `SELECT c.model_id,
+                (SELECT count(*) FROM messages m WHERE m.chat_id = c.id) AS msg_count
+           FROM chats c WHERE c.id = $1 AND c.user_id = $2`,
+        [req.params.id, req.session.userId],
+      );
+      if (!info.length) return res.status(404).json({ error: 'Chat not found' });
+      const newModel = cleanModelId(body.modelId);
+      if (Number(info[0].msg_count) > 0 && newModel !== info[0].model_id) {
+        return res.status(400).json({
+          error: 'The model can’t be changed once the chat has messages. Start a new chat to use a different model.',
+          category: 'request',
+        });
+      }
+      sets.push(`model_id = $${i++}`);
+      vals.push(newModel);
+    } catch (err) {
+      if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+      console.error('[chats] model-lock check failed:', err.message);
+      return res.status(500).json({ error: 'Failed to update chat' });
+    }
+  }
+  if ('modality' in body) {
+    if (!MODALITIES.includes(body.modality)) {
+      return res.status(400).json({ error: `modality must be one of: ${MODALITIES.join(', ')}` });
+    }
+    try {
+      const { rows: cur } = await pool.query(
+        `SELECT c.modality,
+                (SELECT count(*) FROM messages m WHERE m.chat_id = c.id) AS msg_count
+           FROM chats c WHERE c.id = $1 AND c.user_id = $2`,
+        [req.params.id, req.session.userId],
+      );
+      if (!cur.length) return res.status(404).json({ error: 'Chat not found' });
+      const changing = cur[0].modality !== body.modality;
+      // The chat type is fixed once the session is active (has messages) — the
+      // thread belongs to that type. Title edits are still fine.
+      if (changing && Number(cur[0].msg_count) > 0) {
+        return res.status(400).json({
+          error: 'The chat type can’t be changed once the chat has messages. Start a new chat for a different type.',
+          category: 'request',
+        });
+      }
+      sets.push(`modality = $${i++}`);
+      vals.push(body.modality);
+      // Changing type on an empty chat invalidates the current model, so clear
+      // it (skip if the same request also sets modelId, to avoid double-assign).
+      if (changing && !('modelId' in body)) sets.push('model_id = NULL');
+    } catch (err) {
+      if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+      console.error('[chats] modality-change check failed:', err.message);
+      return res.status(500).json({ error: 'Failed to update chat' });
+    }
+  }
+
+  if (!sets.length) return res.status(400).json({ error: 'No updatable fields provided' });
+  sets.push('updated_at = now()');
+
+  vals.push(req.params.id, req.session.userId);
+  try {
+    const { rows } = await pool.query(
+      `UPDATE chats SET ${sets.join(', ')}
+        WHERE id = $${i++} AND user_id = $${i}
+        RETURNING id, title, model_id, modality, created_at, updated_at`,
+      vals,
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Chat not found' });
+    res.json({ chat: publicChat(rows[0]) });
+  } catch (err) {
+    if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+    console.error('[chats] update failed:', err.message);
+    res.status(500).json({ error: 'Failed to update chat' });
+  }
+});
+
+// ── messages (thread + send) ────────────────────────────────────────────────
+chatsRouter.get('/:id/messages', listMessages);
+chatsRouter.post('/:id/messages', uploadAttachments, sendMessage);
+chatsRouter.post('/:id/images', uploadAttachments, generateImage);
+chatsRouter.post('/:id/videos', uploadAttachments, submitVideoJob);
+chatsRouter.post('/:id/videos/reconcile', reconcileVideos);
+
+// Delete a chat. The FK cascade removes its messages + media_files rows, but
+// won't run app code — so releasing local storage (decrementing the owner's
+// counter and unlinking the files from disk) is handled explicitly in
+// deleteChatAndReleaseMedia, which captures the local refs before the cascade.
+chatsRouter.delete('/:id', async (req, res) => {
+  try {
+    const { deleted } = await deleteChatAndReleaseMedia(req.session.userId, req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Chat not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+    console.error('[chats] delete failed:', err.message);
+    res.status(500).json({ error: 'Failed to delete chat' });
+  }
+});
+```
+
+### File: `server/src/chats/videogen.js`
+
+```javascript
+import { pool } from '../db.js';
+import { config } from '../config.js';
+import { getDecryptedKey } from '../keys/service.js';
+import {
+  submitVideo,
+  getVideoJob,
+  fetchVideoContent,
+  extractVideoUrls,
+  videoStatus,
+  modelVideoPrice,
+  videoModelSupportsImageInput,
+  classifyError,
+  errorMessage,
+} from '../openrouter/client.js';
+import { resolveOutputTarget, persistGeneratedOutput } from '../storage/output.js';
+import { loadOwnedChat, mediaView, persistAttachments } from './completion.js';
+import { isSupportedImage } from '../storage/local.js';
+
+// Video generation is ASYNCHRONOUS (bible: OpenRouter's /videos endpoint submits
+// a job, then completion is polled). Confirmed against current OpenRouter docs:
+//   POST /videos            -> 202 { id, polling_url, status }
+//   GET  /videos/{id}       -> { status, unsigned_urls?, usage?, error? }
+//   GET  unsigned_urls[i]   -> the video bytes (needs the bearer key)
+// We store the assistant message in a 'pending' state with the job id in
+// metadata and NEVER block the request waiting for the job. Completion is driven
+// by the reconcile endpoint below, which the client polls while a job is in
+// flight AND calls on chat load — so a closed tab or missed event still resolves.
+
+// Load one message + its output media as the client-facing view.
+async function loadMessageView(messageId) {
+  const { rows } = await pool.query(
+    `SELECT id, role, content, content_type, cost_usd, created_at,
+            metadata ->> 'status'    AS status,
+            metadata ->> 'error'     AS error,
+            metadata ->> 'jobStatus' AS job_status
+       FROM messages WHERE id = $1`,
+    [messageId],
+  );
+  if (!rows.length) return null;
+  const media = await pool.query(
+    `SELECT id, direction, size_bytes, file_ref, content_type, storage_location, unavailable_at
+       FROM media_files WHERE message_id = $1 ORDER BY created_at ASC`,
+    [messageId],
+  );
+  const r = rows[0];
+  return {
+    id: r.id,
+    role: r.role,
+    content: r.content,
+    contentType: r.content_type,
+    costUsd: r.cost_usd,
+    status: r.status,
+    error: r.error,
+    jobStatus: r.job_status,
+    createdAt: r.created_at,
+    attachments: media.rows.map(mediaView),
+  };
+}
+
+// Mark a pending video message failed, stashing a short user-facing reason.
+async function markFailed(messageId, message) {
+  await pool
+    .query(
+      `UPDATE messages SET metadata = jsonb_set(metadata || $2::jsonb, '{status}', '"failed"') WHERE id = $1`,
+      [messageId, JSON.stringify({ error: String(message).slice(0, 500) })],
+    )
+    .catch(() => {});
+}
+
+// POST /api/chats/:id/videos — submit an async video job. Returns immediately
+// with a pending assistant message; the client polls /videos/reconcile to finish.
+export async function submitVideoJob(req, res) {
+  const userId = req.session.userId;
+  const { prompt, idempotencyKey } = req.body || {};
+  // Image-to-video takes a single first-frame image; if several are uploaded we
+  // use the first (multipart only — plain JSON leaves req.files empty).
+  const frameFile = (Array.isArray(req.files) ? req.files : [])[0] || null;
+
+  let chat;
+  try {
+    chat = await loadOwnedChat(req.params.id, userId);
+  } catch (err) {
+    if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+    throw err;
+  }
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+  const text = String(prompt || '').trim();
+  if (!text) return res.status(400).json({ error: 'A prompt is required.' });
+  if (chat.modality !== 'video') {
+    return res.status(400).json({ error: 'This chat is not a video chat.', category: 'model' });
+  }
+  if (!chat.model_id) {
+    return res.status(400).json({ error: 'Choose a video model first.', category: 'model' });
+  }
+
+  // First-frame validation (before any spend or DB writes): supported type, the
+  // model must accept a frame image, and input media counts against the local cap.
+  if (frameFile) {
+    if (!isSupportedImage(frameFile.mimetype)) {
+      return res.status(400).json({
+        error: `Unsupported attachment type: ${frameFile.mimetype}. Attach an image (PNG, JPEG, WebP, GIF).`,
+        category: 'request',
+      });
+    }
+    let acceptsFrame = false;
+    try { acceptsFrame = await videoModelSupportsImageInput(chat.model_id); } catch { acceptsFrame = false; }
+    if (!acceptsFrame) {
+      return res.status(400).json({
+        error: 'This video model does not accept a first-frame image. Choose one that supports image-to-video.',
+        category: 'model',
+      });
+    }
+    const { rows: u } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
+    if (Number(u[0].storage_used_bytes) + frameFile.size > config.maxLocalBytes) {
+      return res.status(400).json({
+        error: 'This upload would exceed your 5 GB local storage limit. Delete some media first.',
+        category: 'storage',
+      });
+    }
+  }
+
+  // Idempotent replay: same key already submitted — return that message as-is.
+  if (idempotencyKey) {
+    const existing = await pool.query(
+      `SELECT id FROM messages
+        WHERE chat_id = $1 AND role = 'assistant' AND metadata ->> 'idempotencyKey' = $2
+        LIMIT 1`,
+      [chat.id, String(idempotencyKey)],
+    );
+    if (existing.rows.length) {
+      return res.json({ message: await loadMessageView(existing.rows[0].id) });
+    }
+  }
+
+  const key = await getDecryptedKey(userId);
+  if (!key) {
+    return res.status(400).json({ error: 'Add your OpenRouter API key in Settings before generating.', category: 'key' });
+  }
+
+  // Pre-flight storage check: don't spend if there's no room to keep the result.
+  // Only applies when output lands locally — a linked cloud folder doesn't count
+  // against the 5 GB cap.
+  const target = await resolveOutputTarget(userId);
+  if (target.kind === 'local') {
+    const { rows: u0 } = await pool.query('SELECT storage_used_bytes FROM users WHERE id = $1', [userId]);
+    if (Number(u0[0].storage_used_bytes) >= config.maxLocalBytes) {
+      return res.status(400).json({ error: 'You are at your 5 GB local storage limit. Delete some media first.', category: 'storage' });
+    }
+  }
+
+  // Create the user prompt + a pending assistant row atomically. A per-user
+  // advisory lock serializes concurrent submits so the concurrent-video cap
+  // can't be raced past; the per-chat partial unique index (migration 003)
+  // additionally refuses two pending generations in the same chat.
+  let userMsgId;
+  let assistantId;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)', [`video:${userId}`]);
+    const { rows: cnt } = await client.query(
+      `SELECT count(*)::int AS n FROM messages m
+         JOIN chats c ON c.id = m.chat_id
+        WHERE c.user_id = $1 AND m.role = 'assistant' AND m.content_type = 'video'
+          AND (m.metadata ->> 'status') = 'pending'`,
+      [userId],
+    );
+    if (cnt[0].n >= config.maxConcurrentVideos) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(429).json({
+        error: `You already have ${cnt[0].n} video job(s) generating. Wait for one to finish before starting another.`,
+        category: 'pending',
+      });
+    }
+    // clock_timestamp() (not the shared transaction now()) so the user turn
+    // sorts strictly before its assistant reply within this one transaction.
+    const um = await client.query(
+      `INSERT INTO messages (chat_id, role, content, content_type, created_at)
+       VALUES ($1, 'user', $2, 'text', clock_timestamp()) RETURNING id`,
+      [chat.id, text],
+    );
+    userMsgId = um.rows[0].id;
+    const am = await client.query(
+      `INSERT INTO messages (chat_id, role, content, content_type, metadata, created_at)
+       VALUES ($1, 'assistant', NULL, 'video', $2::jsonb, clock_timestamp()) RETURNING id`,
+      [chat.id, JSON.stringify({
+        status: 'pending', jobStatus: 'submitting', model: chat.model_id,
+        idempotencyKey: idempotencyKey || null, jobId: null,
+      })],
+    );
+    assistantId = am.rows[0].id;
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'A generation is already in progress in this chat.', category: 'pending' });
+    }
+    console.error('[videogen] setup failed:', err.message);
+    return res.status(500).json({ error: 'Failed to start generation.' });
+  }
+  client.release();
+
+  // Clean up the pending assistant row on any submit failure so nothing's stuck.
+  const fail = async (status, body) => {
+    await pool.query('DELETE FROM messages WHERE id = $1', [assistantId]).catch(() => {});
+    return res.status(status).json({ ...body, userMessageId: userMsgId });
+  };
+
+  // Persist the first-frame image onto the user turn (input media: local +
+  // counted) and build the OpenRouter frame_images payload from the same buffer.
+  // A persist failure aborts before submitting the (billable) job.
+  let userAttachments = [];
+  let frameImages;
+  if (frameFile) {
+    try {
+      const r = await persistAttachments(userId, userMsgId, [frameFile]);
+      userAttachments = r.created.map(mediaView);
+    } catch (err) {
+      console.error('[videogen] frame persist failed:', err.message);
+      return fail(500, { error: 'Failed to store the first-frame image.', category: 'request' });
+    }
+    frameImages = [{
+      type: 'image_url',
+      image_url: { url: `data:${frameFile.mimetype};base64,${frameFile.buffer.toString('base64')}` },
+      frame_type: 'first_frame',
+    }];
+  }
+
+  let orRes;
+  try {
+    orRes = await submitVideo({ key, model: chat.model_id, prompt: text, frameImages });
+  } catch (err) {
+    console.error('[videogen] OpenRouter submit failed:', err?.message);
+    return fail(502, { error: 'Could not reach OpenRouter. Try again shortly.', category: 'model' });
+  }
+
+  if (!orRes.ok) {
+    let orError = null;
+    try { orError = (await orRes.json())?.error; } catch { /* non-JSON */ }
+    const status = orRes.status >= 400 && orRes.status < 600 ? orRes.status : 502;
+    return fail(status, { error: errorMessage(orError, `OpenRouter returned HTTP ${orRes.status}.`), category: classifyError(orRes.status, orError) });
+  }
+
+  let json;
+  try { json = await orRes.json(); } catch { return fail(502, { error: 'OpenRouter returned an unreadable response.', category: 'model' }); }
+
+  const jobId = json?.id || json?.job_id || null;
+  if (!jobId) return fail(502, { error: 'OpenRouter did not return a video job id.', category: 'model' });
+
+  await pool.query(
+    `UPDATE messages SET metadata = metadata || $2::jsonb WHERE id = $1`,
+    [assistantId, JSON.stringify({
+      jobId,
+      pollingUrl: json?.polling_url || null,
+      jobStatus: json?.status || 'pending',
+      status: 'pending',
+    })],
+  );
+  await pool.query('UPDATE chats SET updated_at = now() WHERE id = $1', [chat.id]);
+
+  return res.json({
+    userMessageId: userMsgId,
+    userAttachments,
+    message: await loadMessageView(assistantId),
+  });
+}
+
+// POST /api/chats/:id/videos/reconcile — re-check every still-pending video job
+// in this chat against OpenRouter and finalize any that finished. Safe to call
+// repeatedly (client polls it) and on chat load. Never throws on one job's
+// failure — each is isolated so a single bad job can't stall the others.
+export async function reconcileVideos(req, res) {
+  const userId = req.session.userId;
+
+  let chat;
+  try {
+    chat = await loadOwnedChat(req.params.id, userId);
+  } catch (err) {
+    if (err.code === '22P02') return res.status(404).json({ error: 'Chat not found' });
+    throw err;
+  }
+  if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+  const { rows: pending } = await pool.query(
+    `SELECT id, metadata ->> 'jobId' AS job_id, metadata ->> 'pollingUrl' AS polling_url
+       FROM messages
+      WHERE chat_id = $1 AND role = 'assistant' AND content_type = 'video'
+        AND (metadata ->> 'status') = 'pending'
+      ORDER BY created_at ASC`,
+    [chat.id],
+  );
+  if (!pending.length) return res.json({ messages: [] });
+
+  const key = await getDecryptedKey(userId);
+  const out = [];
+  for (const row of pending) {
+    try {
+      out.push(await reconcileOne(userId, chat, row, key));
+    } catch (err) {
+      console.error('[videogen] reconcile failed for', row.id, err.message);
+      out.push(await loadMessageView(row.id)); // return current (unchanged) state
+    }
+  }
+  return res.json({ messages: out.filter(Boolean) });
+}
+
+async function reconcileOne(userId, chat, row, key) {
+  if (!row.job_id) {
+    await markFailed(row.id, 'The video job was not submitted. Please try again.');
+    return loadMessageView(row.id);
+  }
+  // No key to poll with (user removed it): leave pending, try again later.
+  if (!key) return loadMessageView(row.id);
+
+  let orRes;
+  try {
+    orRes = await getVideoJob({ key, jobId: row.job_id, pollingUrl: row.polling_url });
+  } catch {
+    return loadMessageView(row.id); // transient network error — retry next poll
+  }
+
+  if (!orRes.ok) {
+    if (orRes.status === 404) await markFailed(row.id, 'The video job expired or was not found.');
+    else if (orRes.status === 401 || orRes.status === 403) await markFailed(row.id, 'Your API key was rejected while checking the job.');
+    // other statuses: leave pending, retry next poll
+    return loadMessageView(row.id);
+  }
+
+  let json;
+  try { json = await orRes.json(); } catch { return loadMessageView(row.id); }
+
+  const st = videoStatus(json);
+  // Keep the raw provider status visible in the UI ("in_progress" etc.).
+  await pool
+    .query(`UPDATE messages SET metadata = metadata || $2::jsonb WHERE id = $1`, [row.id, JSON.stringify({ jobStatus: json?.status || null })])
+    .catch(() => {});
+
+  if (st === 'pending') return loadMessageView(row.id);
+
+  if (st === 'failed') {
+    const raw = json?.error?.message || json?.error || 'The video generation failed.';
+    await markFailed(row.id, typeof raw === 'string' ? raw : 'The video generation failed.');
+    return loadMessageView(row.id);
+  }
+
+  // completed → fetch bytes immediately (URLs are not assumed durable) and persist.
+  const urls = extractVideoUrls(json);
+  if (!urls.length) {
+    await markFailed(row.id, 'The job completed but returned no video.');
+    return loadMessageView(row.id);
+  }
+
+  // Download every returned video (URLs aren't durable; the download needs the
+  // bearer key). A transient failure here leaves the message pending so a later
+  // reconcile can retry.
+  let buffers;
+  try {
+    buffers = [];
+    for (const url of urls) {
+      const r = await fetchVideoContent({ key, url });
+      if (!r.ok) throw new Error(`content HTTP ${r.status}`);
+      const buffer = Buffer.from(await r.arrayBuffer());
+      const mimetype = (r.headers.get('content-type') || 'video/mp4').split(';')[0];
+      buffers.push({ buffer, mimetype });
+    }
+  } catch (err) {
+    console.error('[videogen] download failed:', err.message);
+    return loadMessageView(row.id);
+  }
+
+  // Cost: prefer OpenRouter's reported usage.cost, else the model's per-video price.
+  let cost = json?.usage?.cost ?? null;
+  if (cost == null) {
+    const per = await modelVideoPrice(chat.model_id).catch(() => null);
+    if (per != null) cost = per;
+  }
+
+  // Persist to the resolved target (cloud folder or local disk). A failure here
+  // (e.g. a cloud upload error) is treated as transient: leave the message
+  // pending and let the next reconcile retry, rather than marking it failed.
+  try {
+    await persistGeneratedOutput({ userId, messageId: row.id, chatId: chat.id, buffers, cost });
+  } catch (err) {
+    console.error('[videogen] persist failed:', err.message);
+    return loadMessageView(row.id);
+  }
+  return loadMessageView(row.id);
+}
+```
+
+### File: `server/src/config.js`
+
+```javascript
+import 'dotenv/config';
+import path from 'node:path';
+
+// Central place to read + validate environment configuration.
+
+function required(name) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
+const encryptionKey = required('ENCRYPTION_KEY');
+if (!/^[0-9a-fA-F]{64}$/.test(encryptionKey)) {
+  throw new Error('ENCRYPTION_KEY must be 64 hex characters (32 bytes).');
+}
+
+export const config = {
+  env: process.env.NODE_ENV || 'development',
+  port: Number(process.env.PORT || 8000),
+  databaseUrl: required('DATABASE_URL'),
+  corsOrigin: (process.env.CORS_ORIGIN || 'http://localhost:5173')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+
+  encryptionKey,
+  sessionSecret: required('SESSION_SECRET'),
+
+  // Cookies: secure=true requires HTTPS. Default from NODE_ENV, overridable.
+  cookieSecure:
+    process.env.COOKIE_SECURE != null
+      ? process.env.COOKIE_SECURE === 'true'
+      : process.env.NODE_ENV === 'production',
+
+  trustedDeviceDays: Number(process.env.TRUSTED_DEVICE_DAYS || 30),
+
+  // OpenRouter API. Base URL is overridable for tests/mocks. The title/referer
+  // are optional attribution headers OpenRouter uses for app rankings.
+  openrouterBaseUrl: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
+  openrouterTitle: process.env.OPENROUTER_APP_TITLE || 'mmchat',
+  openrouterReferer: process.env.OPENROUTER_APP_URL || '',
+
+  // Local media storage (uploaded input now; generated output in Step 7). Files
+  // live under storageDir/<userId>/; the dir is gitignored.
+  storageDir: process.env.STORAGE_DIR
+    ? path.resolve(process.env.STORAGE_DIR)
+    : path.resolve(process.cwd(), 'storage'),
+  // 5 GB per-user local cap, with an in-app notice at 3.5 GB (bible thresholds).
+  maxLocalBytes: Number(process.env.MAX_LOCAL_BYTES || 5 * 1024 * 1024 * 1024),
+  noticeLocalBytes: Number(process.env.NOTICE_LOCAL_BYTES || 3.5 * 1024 * 1024 * 1024),
+  // Per-attachment upload ceiling (bytes) and max attachments per message.
+  maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES || 20 * 1024 * 1024),
+  maxAttachments: Number(process.env.MAX_ATTACHMENTS || 6),
+
+  // Video generation (async). Cap on concurrent pending video jobs per user —
+  // the Spend Protection backstop (bible); the disabled button + idempotency key
+  // are the primary duplicate-spend guard.
+  maxConcurrentVideos: Number(process.env.MAX_CONCURRENT_VIDEOS || 2),
+
+  // Cloud storage — Google Drive (Step 8). OAuth client credentials come from a
+  // Google Cloud project; PUBLIC_BASE_URL is the app's externally-reachable
+  // origin, used to build the OAuth redirect URI. All optional — if unset, Drive
+  // simply isn't offered in Settings. The Google endpoint base URLs are
+  // overridable so the OAuth/API/upload calls can be pointed at a mock in tests.
+  googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, ''),
+  googleAuthBase: (process.env.GOOGLE_AUTH_BASE || 'https://accounts.google.com').replace(/\/$/, ''),
+  googleOauthBase: (process.env.GOOGLE_OAUTH_BASE || 'https://oauth2.googleapis.com').replace(/\/$/, ''),
+  googleApiBase: (process.env.GOOGLE_API_BASE || 'https://www.googleapis.com').replace(/\/$/, ''),
+};
+```
+
+### File: `server/src/crypto/encryption.js`
+
+```javascript
+import crypto from 'node:crypto';
+import { config } from '../config.js';
+
+// AES-256-GCM encryption for secrets at rest (TOTP secrets now; OpenRouter key
+// and cloud refresh tokens in later steps). The master key comes from
+// ENCRYPTION_KEY (validated as 32 bytes / 64 hex chars at config load).
+//
+// Ciphertext format: base64(iv).base64(authTag).base64(ciphertext)
+
+const KEY = Buffer.from(config.encryptionKey, 'hex');
+const IV_BYTES = 12; // 96-bit nonce, standard for GCM
+
+export function encrypt(plaintext) {
+  const iv = crypto.randomBytes(IV_BYTES);
+  const cipher = crypto.createCipheriv('aes-256-gcm', KEY, iv);
+  const ciphertext = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [iv, tag, ciphertext].map((b) => b.toString('base64')).join('.');
+}
+
+export function decrypt(payload) {
+  const [ivB64, tagB64, ctB64] = String(payload).split('.');
+  if (!ivB64 || !tagB64 || !ctB64) {
+    throw new Error('Malformed ciphertext');
+  }
+  const iv = Buffer.from(ivB64, 'base64');
+  const tag = Buffer.from(tagB64, 'base64');
+  const ciphertext = Buffer.from(ctB64, 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', KEY, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+}
+```
+
+### File: `server/src/crypto/tokens.js`
+
+```javascript
+import crypto from 'node:crypto';
+
+// Helpers for opaque, high-entropy tokens (invite tokens, trusted-device
+// tokens, backup codes). These are hashed with SHA-256 for storage — unlike
+// passwords, they're random and high-entropy, so a fast hash is appropriate
+// and lets us do constant-time equality on the digest.
+
+export function randomToken(bytes = 32) {
+  return crypto.randomBytes(bytes).toString('base64url');
+}
+
+export function sha256(input) {
+  return crypto.createHash('sha256').update(String(input)).digest('hex');
+}
+
+// Constant-time comparison of two hex digests of equal length.
+export function timingSafeEqualHex(a, b) {
+  const bufA = Buffer.from(String(a), 'hex');
+  const bufB = Buffer.from(String(b), 'hex');
+  if (bufA.length !== bufB.length || bufA.length === 0) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+// One-time backup codes, formatted xxxxx-xxxxx (10 hex chars, ~40 bits each).
+export function generateBackupCodes(count = 10) {
+  return Array.from({ length: count }, () => {
+    const raw = crypto.randomBytes(5).toString('hex'); // 10 hex chars
+    return `${raw.slice(0, 5)}-${raw.slice(5)}`;
+  });
+}
+```
+
+### File: `server/src/db.js`
+
+```javascript
+import pg from 'pg';
+import { config } from './config.js';
+
+// Shared connection pool for the whole backend.
+export const pool = new pg.Pool({
+  connectionString: config.databaseUrl,
+});
+
+pool.on('error', (err) => {
+  // Don't crash the process on an idle-client error; log and let the pool recover.
+  console.error('[db] unexpected idle client error:', err.message);
+});
+
+export function query(text, params) {
+  return pool.query(text, params);
+}
+
+// Lightweight readiness probe used by the health-check route.
+export async function pingDatabase() {
+  const { rows } = await pool.query('SELECT 1 AS ok');
+  return rows[0]?.ok === 1;
+}
+```
+
+### File: `server/src/index.js`
+
+```javascript
+import express from 'express';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
+import session from 'express-session';
+import connectPgSimple from 'connect-pg-simple';
+import { config } from './config.js';
+import { pool, pingDatabase } from './db.js';
+import { csrfOriginCheck } from './auth/middleware.js';
+import { authRouter } from './auth/routes.js';
+import { chatsRouter } from './chats/routes.js';
+import { keysRouter } from './keys/routes.js';
+import { modelsRouter } from './openrouter/routes.js';
+import { mediaRouter } from './media/routes.js';
+import { storageRouter } from './storage/routes.js';
+import { accountRouter } from './account/routes.js';
+
+const app = express();
+
+// Behind nginx (prod) and the Vite proxy (dev): trust the first proxy so
+// secure cookies and req.ip work off X-Forwarded-* headers.
+app.set('trust proxy', 1);
+
+app.use(helmet());
+app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser(config.sessionSecret));
+
+// Postgres-backed server-side sessions (connect-pg-simple over the `sessions`
+// table). Cookie is httpOnly/secure/sameSite — no tokens in localStorage.
+const PgStore = connectPgSimple(session);
+app.use(
+  session({
+    name: 'mmchat.sid',
+    store: new PgStore({ pool, tableName: 'sessions', createTableIfMissing: false }),
+    secret: config.sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
+    cookie: {
+      httpOnly: true,
+      secure: config.cookieSecure,
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7-day session
+    },
+  }),
+);
+
+app.use(csrfOriginCheck);
+
+// ── health ─────────────────────────────────────────────────────────────────
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', service: 'mmchat-server', time: new Date().toISOString() });
+});
+
+app.get('/api/health/db', async (_req, res) => {
+  try {
+    const ok = await pingDatabase();
+    res.json({ status: ok ? 'ok' : 'error', database: ok ? 'reachable' : 'unreachable' });
+  } catch (err) {
+    res.status(503).json({ status: 'error', database: 'unreachable', message: err.message });
+  }
+});
+
+// ── auth ─────────────────────────────────────────────────────────────────
+app.use('/api/auth', authRouter);
+
+// ── app: chats + BYOK key ──────────────────────────────────────────────────
+app.use('/api/chats', chatsRouter);
+app.use('/api/keys', keysRouter);
+app.use('/api/models', modelsRouter);
+app.use('/api/media', mediaRouter);
+app.use('/api/storage', storageRouter);
+app.use('/api/account', accountRouter);
+
+const server = app.listen(config.port, () => {
+  console.log(`[mmchat] server listening on http://localhost:${config.port} (${config.env})`);
+});
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    server.close(() => process.exit(0));
+  });
+}
+
+export { app };
+```
+
+### File: `server/src/keys/routes.js`
+
+```javascript
+import { Router } from 'express';
+import { requireAuth } from '../auth/middleware.js';
+import { saveOpenRouterKey, getKeyMeta, deleteKey, getDecryptedKey } from './service.js';
+import { getKeyInfo } from '../openrouter/client.js';
+
+// /api/keys — the user's own OpenRouter API key (BYOK). All routes require a
+// fully-authenticated session; every query is scoped to req.session.userId.
+export const keysRouter = Router();
+
+keysRouter.use(requireAuth);
+
+// Current key metadata (never the key itself): { hasKey, suffix?, label?, createdAt? }
+keysRouter.get('/', async (req, res) => {
+  try {
+    const meta = await getKeyMeta(req.session.userId);
+    res.json(meta);
+  } catch (err) {
+    console.error('[keys] get failed:', err.message);
+    res.status(500).json({ error: 'Failed to load API key status' });
+  }
+});
+
+// Credit / limit info for the user's key, read live from OpenRouter's
+// GET /auth/key. Powers the pre-flight balance check before video generation
+// (and the future profile "view credits" link). The key itself never leaves
+// the server — only the derived numbers are returned.
+keysRouter.get('/credits', async (req, res) => {
+  const key = await getDecryptedKey(req.session.userId);
+  if (!key) return res.status(400).json({ error: 'Add your OpenRouter API key in Settings first.', category: 'key' });
+  try {
+    res.json(await getKeyInfo(key));
+  } catch (err) {
+    console.error('[keys] credits failed:', err.message);
+    res.status(502).json({ error: 'Could not read your key’s credit info from OpenRouter.', category: 'key' });
+  }
+});
+
+// Save / replace the key. Returns metadata only.
+keysRouter.put('/', async (req, res) => {
+  const { key, label } = req.body || {};
+  try {
+    const meta = await saveOpenRouterKey(req.session.userId, key, label);
+    res.json(meta);
+  } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    console.error('[keys] save failed:', err.message);
+    res.status(500).json({ error: 'Failed to save API key' });
+  }
+});
+
+keysRouter.delete('/', async (req, res) => {
+  try {
+    await deleteKey(req.session.userId);
+    res.json({ hasKey: false });
+  } catch (err) {
+    console.error('[keys] delete failed:', err.message);
+    res.status(500).json({ error: 'Failed to delete API key' });
+  }
+});
+```
+
+### File: `server/src/keys/service.js`
+
+```javascript
+import { pool } from '../db.js';
+import { encrypt, decrypt } from '../crypto/encryption.js';
+
+// BYOK OpenRouter key storage. One key per user for now (the schema allows
+// several rows via api_keys.label, but v1 keeps a single active key). The raw
+// key is encrypted at rest with AES-256-GCM (server-side master key); only the
+// last 4 chars (key_suffix) are ever returned to the client. Decryption happens
+// server-side only, at request time (later steps) — never logged, never sent out.
+
+const MIN_KEY_LEN = 16;
+
+function suffixOf(rawKey) {
+  return rawKey.slice(-4);
+}
+
+// Replace any existing key for this user with a freshly-encrypted one.
+export async function saveOpenRouterKey(userId, rawKey, label = 'OpenRouter') {
+  const key = String(rawKey || '').trim();
+  if (key.length < MIN_KEY_LEN) {
+    const err = new Error('That does not look like a valid API key.');
+    err.status = 400;
+    throw err;
+  }
+
+  const encrypted = encrypt(key);
+  const suffix = suffixOf(key);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM api_keys WHERE user_id = $1', [userId]);
+    const { rows } = await client.query(
+      `INSERT INTO api_keys (user_id, encrypted_key, key_suffix, label)
+       VALUES ($1, $2, $3, $4)
+       RETURNING key_suffix, label, created_at`,
+      [userId, encrypted, suffix, label || 'OpenRouter'],
+    );
+    await client.query('COMMIT');
+    return { hasKey: true, suffix: rows[0].key_suffix, label: rows[0].label, createdAt: rows[0].created_at };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Metadata only — safe to return to the client. Never includes the key itself.
+export async function getKeyMeta(userId) {
+  const { rows } = await pool.query(
+    `SELECT key_suffix, label, created_at
+       FROM api_keys WHERE user_id = $1
+      ORDER BY created_at DESC LIMIT 1`,
+    [userId],
+  );
+  if (!rows.length) return { hasKey: false };
+  return { hasKey: true, suffix: rows[0].key_suffix, label: rows[0].label, createdAt: rows[0].created_at };
+}
+
+// Server-side only: decrypt the stored key for outbound OpenRouter calls
+// (used in later steps). Returns null if the user has no key on file.
+export async function getDecryptedKey(userId) {
+  const { rows } = await pool.query(
+    `SELECT encrypted_key FROM api_keys WHERE user_id = $1
+      ORDER BY created_at DESC LIMIT 1`,
+    [userId],
+  );
+  if (!rows.length) return null;
+  return decrypt(rows[0].encrypted_key);
+}
+
+export async function deleteKey(userId) {
+  const { rowCount } = await pool.query('DELETE FROM api_keys WHERE user_id = $1', [userId]);
+  return rowCount > 0;
+}
+```
+
+### File: `server/src/media/routes.js`
+
+```javascript
+import { Router } from 'express';
+import { pool } from '../db.js';
+import { requireAuth } from '../auth/middleware.js';
+import { resolveRef, contentTypeFor } from '../storage/local.js';
+import { getAccountById, getAccessToken } from '../storage/accounts.js';
+import * as drive from '../storage/providers/googleDrive.js';
+
+// /api/media/:id — serve a stored media file (local disk or a linked cloud
+// folder), but only to the user who owns the chat it belongs to. Ownership is
+// enforced by joining through messages -> chats -> user_id.
+export const mediaRouter = Router();
+
+mediaRouter.use(requireAuth);
+
+// Mark a cloud file that vanished on the provider side as unavailable (lazy
+// out-of-band detection). Idempotent; kept, not deleted, so history survives.
+async function flagUnavailable(mediaId) {
+  await pool
+    .query('UPDATE media_files SET unavailable_at = now() WHERE id = $1 AND unavailable_at IS NULL', [mediaId])
+    .catch(() => {});
+}
+
+// Never let the browser cache an error/unavailable response. 404/410 are
+// heuristically cacheable by default, which would pin a transient failure (e.g.
+// a file that was briefly unreachable while its provider was disconnected) and
+// keep showing the placeholder even after the file is reachable again.
+function noStore(res) {
+  res.setHeader('Cache-Control', 'no-store');
+  return res;
+}
+
+mediaRouter.get('/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT mf.id, mf.file_ref, mf.storage_location, mf.storage_account_id,
+              mf.content_type, mf.unavailable_at
+         FROM media_files mf
+         JOIN messages m ON m.id = mf.message_id
+         JOIN chats c ON c.id = m.chat_id
+        WHERE mf.id = $1 AND c.user_id = $2`,
+      [req.params.id, req.session.userId],
+    );
+    const media = rows[0];
+    if (!media) return noStore(res).status(404).json({ error: 'Not found' });
+
+    // Already known-gone (out-of-band delete): don't re-fetch.
+    if (media.unavailable_at) {
+      return noStore(res).status(410).json({ error: 'This file is no longer available in your cloud storage.', category: 'unavailable' });
+    }
+
+    if (media.storage_location === 'local') {
+      res.setHeader('Content-Type', media.content_type || contentTypeFor(media.file_ref));
+      res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+      return res.sendFile(resolveRef(media.file_ref), (err) => {
+        if (err && !res.headersSent) noStore(res).status(404).json({ error: 'Not found' });
+      });
+    }
+
+    if (media.storage_location === 'google_drive') {
+      // No account link (e.g. the provider was disconnected) → can't fetch it.
+      const account = media.storage_account_id ? await getAccountById(media.storage_account_id) : null;
+      if (!account) {
+        return noStore(res).status(410).json({ error: 'This file is stored in a cloud account that is no longer connected.', category: 'unavailable' });
+      }
+      let dr;
+      try {
+        const token = await getAccessToken(account);
+        dr = await drive.downloadFile(token, media.file_ref);
+      } catch (err) {
+        console.error('[media] drive fetch failed:', err.message);
+        return noStore(res).status(502).json({ error: 'Could not reach your cloud storage.', category: 'model' });
+      }
+      if (dr.status === 404) {
+        await flagUnavailable(media.id); // deleted on the provider side
+        return noStore(res).status(410).json({ error: 'This file is no longer available in your cloud storage.', category: 'unavailable' });
+      }
+      if (!dr.ok || !dr.body) {
+        return noStore(res).status(502).json({ error: 'Could not read the file from your cloud storage.', category: 'model' });
+      }
+      res.setHeader('Content-Type', media.content_type || dr.headers.get('content-type') || 'application/octet-stream');
+      // Short cache + revalidate: cloud files can be deleted out-of-band, so we
+      // don't want the browser pinning a copy for long (it would keep showing a
+      // file the user deleted in Drive until the cache expired).
+      res.setHeader('Cache-Control', 'private, max-age=60, must-revalidate');
+      // Stream the provider response body straight through.
+      const reader = dr.body.getReader();
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          res.write(Buffer.from(value));
+        }
+        return res.end();
+      } catch (err) {
+        if (!res.headersSent) noStore(res).status(502).json({ error: 'Cloud download interrupted.' });
+        else res.end();
+      }
+      return;
+    }
+
+    return noStore(res).status(404).json({ error: 'Not found' });
+  } catch (err) {
+    if (err.code === '22P02') return noStore(res).status(404).json({ error: 'Not found' });
+    console.error('[media] serve failed:', err.message);
+    if (!res.headersSent) noStore(res).status(500).json({ error: 'Failed to load media' });
+  }
+});
+```
+
+### File: `server/src/openrouter/client.js`
+
+```javascript
+import { config } from '../config.js';
+
+// Thin client over the OpenRouter REST API. BYOK: every authenticated call
+// takes the user's own decrypted key as a bearer token — there is no
+// server-wide key. The /models list is public and needs no key.
+
+const BASE = config.openrouterBaseUrl;
+
+function authHeaders(key) {
+  const h = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+  if (config.openrouterTitle) h['X-Title'] = config.openrouterTitle;
+  if (config.openrouterReferer) h['HTTP-Referer'] = config.openrouterReferer;
+  return h;
+}
+
+// Model descriptions arrive as markdown and sometimes embed links to other
+// model pages. Render as plain text: turn ![alt](url) and [text](url) into
+// their visible text, and drop stray markdown emphasis markers.
+export function stripMarkdown(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // images -> alt
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // links -> text
+    .replace(/`{1,3}([^`]*)`{1,3}/g, '$1') // inline code
+    .replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, '$1') // bold/italic
+    .trim();
+}
+
+// ── models (public, cached) ────────────────────────────────────────────────
+let cache = { at: 0, data: null };
+const CACHE_MS = 5 * 60 * 1000;
+
+async function rawModels() {
+  if (cache.data && Date.now() - cache.at < CACHE_MS) return cache.data;
+  const res = await fetch(`${BASE}/models`, { headers: { Accept: 'application/json' } });
+  if (!res.ok) {
+    throw new Error(`Failed to load models from OpenRouter (HTTP ${res.status})`);
+  }
+  const json = await res.json();
+  const data = Array.isArray(json?.data) ? json.data : [];
+  cache = { at: Date.now(), data };
+  return data;
+}
+
+function outputModalities(m) {
+  const arch = m.architecture || {};
+  if (Array.isArray(arch.output_modalities) && arch.output_modalities.length) {
+    return arch.output_modalities;
+  }
+  // Fall back to the legacy "modality" string like "text->text" / "text+image->text".
+  const mod = String(arch.modality || '');
+  const out = mod.includes('->') ? mod.split('->')[1] : mod;
+  return out.split('+').map((s) => s.trim()).filter(Boolean);
+}
+
+function inputModalities(m) {
+  const arch = m.architecture || {};
+  if (Array.isArray(arch.input_modalities) && arch.input_modalities.length) {
+    return arch.input_modalities;
+  }
+  const mod = String(arch.modality || '');
+  const inp = mod.includes('->') ? mod.split('->')[0] : mod;
+  return inp.split('+').map((s) => s.trim()).filter(Boolean);
+}
+
+// Whether a model id accepts image input (vision). Used to gate the attach
+// control and to reject image sends to text-only models.
+export async function modelSupportsImageInput(modelId) {
+  const data = await rawModels();
+  const m = data.find((x) => x.id === modelId);
+  return m ? inputModalities(m).includes('image') : false;
+}
+
+// Whether an image-GENERATION model accepts image input (image-to-image / edit).
+// Image models live on their own catalogue (/images/models), NOT the chat
+// catalogue, so modelSupportsImageInput (which searches /models) never finds
+// them — this checks the right list.
+export async function imageModelSupportsImageInput(modelId) {
+  try {
+    const data = await rawImageModels();
+    const m = data.find((x) => x.id === modelId);
+    return m ? inputModalities(m).includes('image') : false;
+  } catch {
+    return false;
+  }
+}
+
+// Returns a trimmed, client-safe model list filtered by output modality.
+// modality: 'text' (default) | 'image' | 'video' | 'all'.
+// Video models live on a SEPARATE catalogue endpoint (/videos/models) rather
+// than being tagged with output_modalities on /models — confirmed against the
+// current OpenRouter docs — so video routes to listVideoModels().
+export async function listModels(modality = 'text') {
+  if (modality === 'video') return listVideoModels();
+  if (modality === 'image') return listImageModels();
+  const data = await rawModels();
+  const filtered = data.filter((m) => {
+    if (modality === 'all') return true;
+    return outputModalities(m).includes(modality);
+  });
+  return filtered
+    .map((m) => ({
+      id: m.id,
+      name: m.name || m.id,
+      description: stripMarkdown(m.description),
+      contextLength: m.context_length ?? m.top_provider?.context_length ?? null,
+      pricing: {
+        // OpenRouter prices are USD-per-token strings; pass through as-is and
+        // let the client format (e.g. per-million tokens).
+        prompt: m.pricing?.prompt ?? null,
+        completion: m.pricing?.completion ?? null,
+        request: m.pricing?.request ?? null,
+        image: m.pricing?.image ?? null,
+      },
+      outputModalities: outputModalities(m),
+      inputModalities: inputModalities(m),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ── image models (Unified Image API catalogue) ─────────────────────────────
+// Image-generation models live on a dedicated /images/models endpoint (~48
+// models), NOT tagged with output_modalities on the main /models list (which
+// only carries ~3 image-output chat models). That endpoint carries no pricing —
+// prices are on a per-model sub-endpoint — so we enrich per-image price from the
+// main /models catalogue where a model appears in both, else leave it null
+// ("pricing n/a"; the exact cost still shows on each generated result).
+let icache = { at: 0, data: null };
+
+async function rawImageModels() {
+  if (icache.data && Date.now() - icache.at < CACHE_MS) return icache.data;
+  const res = await fetch(`${BASE}/images/models`, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`Failed to load image models from OpenRouter (HTTP ${res.status})`);
+  const json = await res.json();
+  const data = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+  icache = { at: Date.now(), data };
+  return data;
+}
+
+// Run an async fn over items with a concurrency cap (used to fetch per-model
+// image pricing without firing ~48 requests at once).
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  const worker = async () => {
+    while (i < items.length) {
+      const idx = i++;
+      out[idx] = await fn(items[idx], idx);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+// Cheapest output-image charge from a model's /endpoints payload, as
+// { cost, unit } (USD). Pricing is an array of billable items per endpoint, e.g.
+// { billable: "output_image", unit: "megapixel", cost_usd: 0.07 }; units vary
+// (megapixel vs image), so we carry the unit through rather than assume per-image.
+function imageOutputPricing(endpointsJson) {
+  const eps = Array.isArray(endpointsJson?.endpoints) ? endpointsJson.endpoints : [];
+  let best = null;
+  for (const ep of eps) {
+    const pricing = Array.isArray(ep?.pricing) ? ep.pricing : [];
+    for (const p of pricing) {
+      if (!String(p?.billable || '').toLowerCase().includes('image')) continue; // output-image charge only
+      const cost = Number(p?.cost_usd);
+      if (!Number.isFinite(cost) || cost <= 0) continue;
+      if (!best || cost < best.cost) best = { cost, unit: String(p?.unit || 'image').toLowerCase() };
+    }
+  }
+  return best;
+}
+
+const imgPriceCache = new Map(); // id -> { at, price: {cost,unit}|null }
+
+// Per-model image pricing, cached. The model id contains slashes that belong in
+// the path (e.g. black-forest-labs/flux.2-max), so it is NOT url-encoded.
+export async function modelImagePricing(modelId) {
+  const c = imgPriceCache.get(modelId);
+  if (c && Date.now() - c.at < CACHE_MS) return c.price;
+  let price = null;
+  try {
+    const res = await fetch(`${BASE}/images/models/${modelId}/endpoints`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) price = imageOutputPricing(await res.json());
+  } catch {
+    price = null;
+  }
+  imgPriceCache.set(modelId, { at: Date.now(), price });
+  return price;
+}
+
+export async function listImageModels() {
+  const data = await rawImageModels();
+  const prices = await mapLimit(data, 6, (m) => modelImagePricing(m.id));
+  return data
+    .map((m, idx) => {
+      const pr = prices[idx]; // { cost, unit } | null
+      return {
+        id: m.id,
+        name: m.name || m.id,
+        description: stripMarkdown(m.description),
+        contextLength: null,
+        pricing: {
+          prompt: null,
+          completion: null,
+          image: pr ? pr.cost : null,
+          imageUnit: pr ? pr.unit : null,
+          request: null,
+        },
+        outputModalities: ['image'],
+        inputModalities: inputModalities(m),
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ── video models (separate catalogue) ──────────────────────────────────────
+let vcache = { at: 0, data: null };
+
+async function rawVideoModels() {
+  if (vcache.data && Date.now() - vcache.at < CACHE_MS) return vcache.data;
+  const res = await fetch(`${BASE}/videos/models`, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`Failed to load video models from OpenRouter (HTTP ${res.status})`);
+  const json = await res.json();
+  const data = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+  vcache = { at: Date.now(), data };
+  return data;
+}
+
+// Cheapest USD per SECOND of video output for a model, matching how OpenRouter
+// labels these ("from $X/second" = the lowest-resolution per-second tier).
+//
+// Real /videos/models `pricing_skus` keys are descriptive and unit-bearing.
+// Per-second families seen in the catalogue (values are USD unless the key says
+// "cents_", and vary by resolution / audio / text-vs-image-to-video):
+//   duration_seconds, duration_seconds_720p, duration_seconds_without_audio_4k,
+//   text_to_video_duration_seconds_1080p, image_to_video_duration_seconds_720p,
+//   cents_per_video_output_second_480p (← cents)
+// We take the cheapest per-second tier (matching OpenRouter's "from $X/second"),
+// skipping input-side charges (e.g. cents_per_image_input). Token-priced models
+// (Seedance's "video_tokens") have no per-second SKU → null ("pricing n/a"); the
+// real cost still lands on the completed job via usage.cost.
+function videoPerSecond(m) {
+  const skus = m?.pricing_skus || m?.pricing || {};
+  const perSecUsd = [];
+  for (const [rawK, rawV] of Object.entries(skus)) {
+    const k = String(rawK).toLowerCase();
+    const v = Number(rawV);
+    if (!Number.isFinite(v) || v <= 0) continue;
+    if (!k.includes('second')) continue;   // per-second SKUs only
+    if (k.includes('input')) continue;      // skip input-side charges
+    perSecUsd.push(k.includes('cent') ? v / 100 : v); // "cents_…" keys are in cents
+  }
+  return perSecUsd.length ? Math.min(...perSecUsd) : null;
+}
+
+export async function modelVideoPrice(modelId) {
+  try {
+    const data = await rawVideoModels();
+    const m = data.find((x) => x.id === modelId);
+    return m ? videoPerSecond(m) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function listVideoModels() {
+  const data = await rawVideoModels();
+  return data
+    .map((m) => ({
+      id: m.id,
+      name: m.name || m.id,
+      description: stripMarkdown(m.description),
+      contextLength: null,
+      pricing: {
+        prompt: null,
+        completion: null,
+        image: null,
+        // USD per second of output (see videoPerSecond above).
+        video: videoPerSecond(m),
+        request: null,
+      },
+      resolutions: Array.isArray(m.supported_resolutions) ? m.supported_resolutions : null,
+      aspectRatios: Array.isArray(m.supported_aspect_ratios) ? m.supported_aspect_ratios : null,
+      outputModalities: ['video'],
+      inputModalities: inputModalities(m),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Whether a video-GENERATION model accepts an input frame image (image-to-video).
+// The video catalogue has its own schema (no architecture.input_modalities) —
+// image-to-video capability is exposed as `supported_frame_images`, a non-empty
+// array of accepted frame slots (e.g. ["first_frame"] / ["first_frame","last_frame"];
+// null means text-to-video only, e.g. sora-2-pro).
+export async function videoModelSupportsImageInput(modelId) {
+  try {
+    const data = await rawVideoModels();
+    const m = data.find((x) => x.id === modelId);
+    return Boolean(m && Array.isArray(m.supported_frame_images) && m.supported_frame_images.length);
+  } catch {
+    return false;
+  }
+}
+
+// ── video generation (async: submit -> poll -> fetch bytes) ─────────────────
+// Submit a job. Returns the raw Response; on success the body carries
+// { id, polling_url, status }. We never wait for completion here.
+// frameImages: optional array of frame objects for image-to-video, shaped
+// { type:'image_url', image_url:{ url }, frame_type:'first_frame'|'last_frame' }
+// (url is an HTTP(S) URL or a base64 data URI). OpenRouter carries these as
+// `frame_images`; omitted entirely for plain text-to-video.
+export function submitVideo({ key, model, prompt, options = {}, frameImages, signal }) {
+  const body = { model, prompt, ...options };
+  if (Array.isArray(frameImages) && frameImages.length) {
+    body.frame_images = frameImages;
+  }
+  return fetch(`${BASE}/videos`, {
+    method: 'POST',
+    headers: authHeaders(key),
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+// Poll a submitted job. Prefer the polling_url OpenRouter handed back; fall
+// back to the conventional path if it wasn't provided.
+export function getVideoJob({ key, jobId, pollingUrl, signal }) {
+  const url = pollingUrl && /^https?:\/\//.test(pollingUrl)
+    ? pollingUrl
+    : `${BASE}/videos/${encodeURIComponent(jobId)}`;
+  return fetch(url, { method: 'GET', headers: authHeaders(key), signal });
+}
+
+// Download the finished video bytes. unsigned_urls point back at the OpenRouter
+// API and require the bearer token.
+export function fetchVideoContent({ key, url, signal }) {
+  return fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${key}` }, signal });
+}
+
+// Collapse the assorted status strings a provider might return into our three
+// buckets. Terminal-good -> 'completed', terminal-bad -> 'failed', else 'pending'.
+export function videoStatus(json) {
+  const s = String(json?.status || '').toLowerCase();
+  if (['completed', 'succeeded', 'success', 'complete'].includes(s)) return 'completed';
+  if (['failed', 'error', 'errored', 'cancelled', 'canceled', 'expired'].includes(s)) return 'failed';
+  return 'pending'; // pending | in_progress | queued | running | processing
+}
+
+// Pull the download URL(s) out of a completed job payload.
+export function extractVideoUrls(json) {
+  const urls = [];
+  const add = (u) => { if (typeof u === 'string' && u) urls.push(u); };
+  if (Array.isArray(json?.unsigned_urls)) json.unsigned_urls.forEach(add);
+  else if (Array.isArray(json?.signed_urls)) json.signed_urls.forEach(add);
+  else if (Array.isArray(json?.output)) json.output.forEach((o) => add(typeof o === 'string' ? o : o?.url));
+  else if (typeof json?.url === 'string') add(json.url);
+  return urls;
+}
+
+// GET /auth/key — the user's own key's credit/limit info. Powers the pre-flight
+// balance check before an expensive video generation (and the future profile
+// "view credits" link).
+export async function getKeyInfo(key) {
+  const res = await fetch(`${BASE}/auth/key`, { method: 'GET', headers: authHeaders(key) });
+  if (!res.ok) {
+    const err = new Error(`Failed to read key info (HTTP ${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  const json = await res.json();
+  const d = json?.data || {};
+  const limit = d.limit != null ? Number(d.limit) : null;
+  const usage = d.usage != null ? Number(d.usage) : null;
+  let remaining = d.limit_remaining != null ? Number(d.limit_remaining) : null;
+  if (remaining == null && limit != null && usage != null) remaining = Math.max(0, limit - usage);
+  return {
+    label: d.label ?? null,
+    usage: Number.isFinite(usage) ? usage : null,
+    limit: Number.isFinite(limit) ? limit : null,
+    remaining: Number.isFinite(remaining) ? remaining : null,
+    isFreeTier: !!d.is_free_tier,
+  };
+}
+
+// ── image generation (Unified Image API) ───────────────────────────────────
+// Returns the raw fetch Response so the caller can surface OpenRouter errors
+// (bad key/credits/model) the same way the chat path does.
+// inputReferences: optional array of image reference objects for image-to-image
+// / editing, shaped { type: 'image_url', image_url: { url } } where url is an
+// HTTP(S) URL or a base64 data URI. OpenRouter carries these as `input_references`
+// on POST /images; omitted entirely for plain text-to-image.
+export function generateImages({ key, model, prompt, inputReferences, signal }) {
+  const body = { model, prompt };
+  if (Array.isArray(inputReferences) && inputReferences.length) {
+    body.input_references = inputReferences;
+  }
+  return fetch(`${BASE}/images`, {
+    method: 'POST',
+    headers: authHeaders(key),
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+function parseImageString(s) {
+  if (typeof s !== 'string') return null;
+  if (s.startsWith('data:')) {
+    const m = /^data:([^;]+);base64,(.*)$/s.exec(s);
+    if (m) return { b64: m[2], mime: m[1] };
+    return null;
+  }
+  if (/^https?:\/\//.test(s)) return { url: s };
+  return null;
+}
+
+// Normalize the various shapes an image response can take (OpenAI-style
+// data[].b64_json / data[].url, image_url objects, or chat-style
+// message.images) into a flat list of { b64?, url?, mime? }.
+export function extractImages(json) {
+  const out = [];
+  const push = (o) => {
+    if (!o) return;
+    if (typeof o === 'string') { out.push(parseImageString(o)); return; }
+    if (o.b64_json) { out.push({ b64: o.b64_json, mime: o.mime_type || o.content_type }); return; }
+    if (o.image_url?.url) { out.push(parseImageString(o.image_url.url)); return; }
+    if (o.url) { out.push(parseImageString(o.url)); return; }
+  };
+  if (Array.isArray(json?.data)) json.data.forEach(push);
+  if (Array.isArray(json?.images)) json.images.forEach(push);
+  const msg = json?.choices?.[0]?.message;
+  if (Array.isArray(msg?.images)) msg.images.forEach(push);
+  return out.filter(Boolean);
+}
+
+// ── chat completions (streaming) ───────────────────────────────────────────
+// Returns the raw fetch Response so the caller can inspect status (to surface
+// OpenRouter errors before streaming) and then pipe the SSE body through.
+export function chatCompletionStream({ key, model, messages, provider, signal }) {
+  const body = { model, messages, stream: true, stream_options: { include_usage: true } };
+  if (provider && Object.keys(provider).length) body.provider = provider;
+  return fetch(`${BASE}/chat/completions`, {
+    method: 'POST',
+    headers: authHeaders(key),
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+// Map an OpenRouter/HTTP error to a user-facing category. The bible splits
+// these into "the user must act on their key/credits" vs "try a different
+// model/provider".
+//   key      – invalid/revoked/missing key   -> fix the key (Settings)
+//   credits  – insufficient credits / quota   -> top up / check the key's account
+//   model    – model or provider unavailable  -> pick a different model
+//   request  – bad request (our fault-ish)    -> generic
+export function classifyError(status, orError) {
+  const code = orError?.code;
+  if (status === 401 || status === 403) return 'key';
+  if (status === 402) return 'credits';
+  if (status === 429) return 'credits'; // rate/quota limits on the user's key
+  if (status === 404) return 'model';
+  if (status === 502 || status === 503) return 'model'; // provider unavailable
+  if (typeof code === 'number') {
+    if (code === 401 || code === 403) return 'key';
+    if (code === 402) return 'credits';
+    if (code === 404) return 'model';
+  }
+  return 'request';
+}
+
+export function errorMessage(orError, fallback) {
+  const msg = orError?.message || orError?.metadata?.raw;
+  return (typeof msg === 'string' && msg.trim()) ? msg.trim() : fallback;
+}
+```
+
+### File: `server/src/openrouter/routes.js`
+
+```javascript
+import { Router } from 'express';
+import { requireAuth } from '../auth/middleware.js';
+import {
+  listModels,
+  modelSupportsImageInput,
+  imageModelSupportsImageInput,
+  videoModelSupportsImageInput,
+  modelImagePricing,
+  modelVideoPrice,
+} from './client.js';
+
+// /api/models — the live OpenRouter model catalogue for the picker. Public data
+// (no user key needed), but gated behind a session. Default modality is text.
+export const modelsRouter = Router();
+
+modelsRouter.use(requireAuth);
+
+const ALLOWED = ['text', 'image', 'video', 'all'];
+
+modelsRouter.get('/', async (req, res) => {
+  const modality = ALLOWED.includes(req.query.modality) ? req.query.modality : 'text';
+  try {
+    const models = await listModels(modality);
+    res.json({ modality, models });
+  } catch (err) {
+    console.error('[models] list failed:', err.message);
+    res.status(502).json({ error: 'Could not reach OpenRouter to list models. Try again shortly.' });
+  }
+});
+
+// Capability lookup for a single model id (used to gate the image-attach
+// control). Fails soft: on any error, report no image support. The image-input
+// check must consult the catalogue that actually lists the model — image-
+// generation models live on /images/models, not the chat /models list — so it's
+// routed by the caller's chat modality.
+modelsRouter.get('/capabilities', async (req, res) => {
+  const id = String(req.query.id || '');
+  if (!id) return res.status(400).json({ error: 'id is required' });
+  const modality = ALLOWED.includes(req.query.modality) ? req.query.modality : 'text';
+  const supportsImageInputFor = modality === 'image'
+    ? imageModelSupportsImageInput
+    : modality === 'video'
+      ? videoModelSupportsImageInput
+      : modelSupportsImageInput;
+  try {
+    const [supportsImageInput, imagePricing, videoPrice] = await Promise.all([
+      supportsImageInputFor(id),
+      modelImagePricing(id),
+      modelVideoPrice(id),
+    ]);
+    res.json({
+      id,
+      supportsImageInput,
+      imagePrice: imagePricing?.cost ?? null,
+      imageUnit: imagePricing?.unit ?? null,
+      videoPrice,
+    });
+  } catch (err) {
+    console.error('[models] capabilities failed:', err.message);
+    res.json({ id, supportsImageInput: false, imagePrice: null, imageUnit: null, videoPrice: null });
+  }
+});
+```
+
+### File: `server/src/storage/accounting.js`
+
+```javascript
+import { readdir, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { pool } from '../db.js';
+import { config } from '../config.js';
+import { deleteRef } from './local.js';
+
+// Local-storage accounting (Step 7). `users.storage_used_bytes` is a denormalized
+// running counter maintained on every write path; the ground truth is the sum of
+// each user's local `media_files.size_bytes`. This module owns the read side
+// (status), the decrement-on-delete path, and a recompute that re-syncs the
+// counter to ground truth (repairing drift from earlier increment-only builds).
+
+// True on-disk total for a user: sum of their local media_files.size_bytes.
+// Sizes are far below 2^53 (a 5 GB cap × any realistic file count), so Number
+// is safe here.
+export async function trueLocalBytes(db, userId) {
+  const { rows } = await db.query(
+    `SELECT COALESCE(SUM(mf.size_bytes), 0)::bigint AS total
+       FROM media_files mf
+       JOIN messages m ON m.id = mf.message_id
+       JOIN chats c    ON c.id = m.chat_id
+      WHERE c.user_id = $1 AND mf.storage_location = 'local'`,
+    [userId],
+  );
+  return Number(rows[0].total);
+}
+
+// Current usage snapshot for the storage endpoint + settings display.
+export async function getStorageStatus(userId) {
+  const { rows } = await pool.query(
+    'SELECT storage_used_bytes FROM users WHERE id = $1',
+    [userId],
+  );
+  const usedBytes = rows.length ? Number(rows[0].storage_used_bytes) : 0;
+  return {
+    usedBytes,
+    capBytes: config.maxLocalBytes,
+    noticeBytes: config.noticeLocalBytes,
+    atNotice: usedBytes >= config.noticeLocalBytes,
+    atCap: usedBytes >= config.maxLocalBytes,
+  };
+}
+
+// Reset one user's counter to the true sum of their local media. Locks the user
+// row so a concurrent write-path increment can't be lost between the read and
+// the write. Returns { before, after } or null if the user doesn't exist.
+export async function recomputeUserStorage(userId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      'SELECT storage_used_bytes FROM users WHERE id = $1 FOR UPDATE',
+      [userId],
+    );
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const before = Number(rows[0].storage_used_bytes);
+    const after = await trueLocalBytes(client, userId);
+    await client.query('UPDATE users SET storage_used_bytes = $1 WHERE id = $2', [after, userId]);
+    await client.query('COMMIT');
+    return { before, after };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Users with their id/email for the recompute script's reporting.
+export async function listUsers() {
+  const { rows } = await pool.query('SELECT id, email FROM users ORDER BY created_at ASC');
+  return rows;
+}
+
+// Delete a chat and release its local media in one transaction: capture the
+// local file refs + byte total BEFORE the FK cascade wipes the media_files rows,
+// delete the chat (cascade removes messages + media_files), then decrement the
+// owner's counter. Disk unlinks happen AFTER commit so a failed unlink can't
+// roll back a committed delete (an orphaned file is recoverable via recompute +
+// manual cleanup; a wrongly-undone delete is worse). GREATEST(0, …) guards the
+// counter against underflow if prior drift left it too low.
+// Returns { deleted, freedBytes } — deleted=false when the chat isn't owned/found.
+export async function deleteChatAndReleaseMedia(userId, chatId) {
+  const client = await pool.connect();
+  let refs = [];
+  let freed = 0;
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT mf.file_ref, mf.size_bytes
+         FROM media_files mf
+         JOIN messages m ON m.id = mf.message_id
+         JOIN chats c    ON c.id = m.chat_id
+        WHERE c.id = $1 AND c.user_id = $2 AND mf.storage_location = 'local'`,
+      [chatId, userId],
+    );
+    refs = rows.map((r) => r.file_ref);
+    freed = rows.reduce((n, r) => n + Number(r.size_bytes), 0);
+
+    const { rowCount } = await client.query(
+      'DELETE FROM chats WHERE id = $1 AND user_id = $2',
+      [chatId, userId],
+    );
+    if (!rowCount) {
+      await client.query('ROLLBACK');
+      return { deleted: false, freedBytes: 0 };
+    }
+    if (freed > 0) {
+      await client.query(
+        'UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2',
+        [freed, userId],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await Promise.all(refs.map((r) => deleteRef(r)));
+  return { deleted: true, freedBytes: freed };
+}
+
+// Files present on disk under storageDir/<userId>/ that no local media_files row
+// references — the on-disk sibling of the cloud "verify" reconciliation. Orphans
+// come from the rare edge cases the normal delete path can't cover: a crash
+// mid-write (bytes on disk, DB row never committed) or a failed post-commit
+// unlink. Only files older than minAgeMs are reported, so a genuinely in-flight
+// write (written but not yet committed) is never mistaken for an orphan and
+// swept out from under an active generation. Pass userId to scope to one user's
+// folder; omit to scan every user. Read-only — returns [{ relpath, sizeBytes }].
+export async function findOrphanFiles({ minAgeMs = 5 * 60 * 1000, userId = null } = {}) {
+  const root = config.storageDir;
+  const { rows } = await pool.query(
+    `SELECT file_ref FROM media_files WHERE storage_location = 'local'`,
+  );
+  const tracked = new Set(rows.map((r) => r.file_ref));
+
+  let userDirs = [];
+  try {
+    userDirs = (await readdir(root, { withFileTypes: true }))
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return []; // storage dir doesn't exist yet
+  }
+  if (userId) userDirs = userDirs.filter((d) => d === userId);
+
+  const orphans = [];
+  const now = Date.now();
+  for (const uid of userDirs) {
+    let files = [];
+    try {
+      files = (await readdir(path.join(root, uid), { withFileTypes: true }))
+        .filter((f) => f.isFile())
+        .map((f) => f.name);
+    } catch { continue; }
+    for (const name of files) {
+      const relpath = `${uid}/${name}`;
+      if (tracked.has(relpath)) continue;
+      let st;
+      try { st = await stat(path.join(root, uid, name)); } catch { continue; }
+      if (now - st.mtimeMs < minAgeMs) continue; // too new — possible in-flight write
+      orphans.push({ relpath, sizeBytes: st.size });
+    }
+  }
+  return orphans;
+}
+
+// Unlink the given orphans (uses the traversal-guarded deleteRef). Returns the
+// bytes freed. Orphans are untracked, so this never touches the counter.
+export async function deleteOrphanFiles(orphans) {
+  let freed = 0;
+  for (const o of orphans) {
+    await deleteRef(o.relpath);
+    freed += o.sizeBytes;
+  }
+  return freed;
+}
+```
+
+### File: `server/src/storage/accounts.js`
+
+```javascript
+import { pool } from '../db.js';
+import { encrypt, decrypt } from '../crypto/encryption.js';
+import * as drive from './providers/googleDrive.js';
+
+// storage_accounts service: linked cloud providers (Step 8 = Google Drive only).
+// Refresh tokens live encrypted at rest (same AES-256-GCM master key as the
+// OpenRouter key); short-lived access tokens are derived on demand and cached in
+// process. Under PM2 cluster each worker keeps its own cache — harmless, it's
+// just an optimization over refreshing on every request.
+
+const tokenCache = new Map(); // storage_account.id -> { accessToken, expiresAt }
+
+const COLS = 'id, user_id, provider, encrypted_refresh_token, folder_ref, priority, connected_at';
+
+export async function getAccount(userId, provider) {
+  const { rows } = await pool.query(
+    `SELECT ${COLS} FROM storage_accounts WHERE user_id = $1 AND provider = $2`,
+    [userId, provider],
+  );
+  return rows[0] || null;
+}
+
+export async function getAccountById(id) {
+  const { rows } = await pool.query(`SELECT ${COLS} FROM storage_accounts WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
+
+// The account new generation output should upload to: the highest-priority
+// linked account that has a target folder. Step 8 has at most one (Drive);
+// Step 9 generalizes the priority/quota fallthrough.
+export async function getActiveCloudAccount(userId) {
+  const { rows } = await pool.query(
+    `SELECT ${COLS} FROM storage_accounts
+      WHERE user_id = $1 AND folder_ref IS NOT NULL
+      ORDER BY priority ASC, connected_at ASC
+      LIMIT 1`,
+    [userId],
+  );
+  return rows[0] || null;
+}
+
+export async function listAccounts(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, provider, folder_ref, priority, connected_at
+       FROM storage_accounts WHERE user_id = $1 ORDER BY priority ASC, connected_at ASC`,
+    [userId],
+  );
+  return rows;
+}
+
+// A valid access token for an account (cached until ~30s before expiry, else
+// refreshed from the stored refresh token). google_drive only for now.
+export async function getAccessToken(account) {
+  const cached = tokenCache.get(account.id);
+  if (cached && cached.expiresAt > Date.now() + 30_000) return cached.accessToken;
+  const refreshToken = decrypt(account.encrypted_refresh_token);
+  const { accessToken, expiresIn } = await drive.refreshAccessToken(refreshToken);
+  tokenCache.set(account.id, { accessToken, expiresAt: Date.now() + (expiresIn || 3600) * 1000 });
+  return accessToken;
+}
+
+// Insert or update the user's account for a provider (reconnect is idempotent
+// via the (user_id, provider) unique constraint). → account id.
+export async function saveAccount({ userId, provider, refreshToken, folderRef }) {
+  const enc = encrypt(refreshToken);
+  const { rows } = await pool.query(
+    `INSERT INTO storage_accounts (user_id, provider, encrypted_refresh_token, folder_ref)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id, provider) DO UPDATE
+       SET encrypted_refresh_token = EXCLUDED.encrypted_refresh_token,
+           folder_ref   = EXCLUDED.folder_ref,
+           connected_at = now()
+     RETURNING id`,
+    [userId, provider, enc, folderRef],
+  );
+  const accountId = rows[0].id;
+  tokenCache.delete(accountId); // force a fresh token against the new refresh token
+
+  // Re-adopt this user's cloud media that a previous disconnect orphaned (the FK
+  // set storage_account_id NULL when the old account row was deleted). Same
+  // provider only, and only rows not already flagged unavailable. If the user
+  // reconnected a *different* account, files it can't reach simply flag
+  // unavailable on the next serve — so this is safe either way, and restores
+  // access in the common case of reconnecting the same account.
+  await pool.query(
+    `UPDATE media_files mf SET storage_account_id = $1
+       FROM messages m, chats c
+      WHERE mf.message_id = m.id AND m.chat_id = c.id
+        AND c.user_id = $2 AND mf.storage_location = $3
+        AND mf.storage_account_id IS NULL AND mf.unavailable_at IS NULL`,
+    [accountId, userId, provider],
+  );
+  return accountId;
+}
+
+// Disconnect: revoke at the provider (best-effort) and drop the row. The FK on
+// media_files is ON DELETE SET NULL, so past cloud references survive but lose
+// their account link and degrade to "not available" when served. Files already
+// in the user's Drive are left untouched (their data, their account).
+export async function disconnectAccount(userId, provider) {
+  const account = await getAccount(userId, provider);
+  if (!account) return false;
+  try {
+    await drive.revoke(decrypt(account.encrypted_refresh_token));
+  } catch { /* best effort */ }
+  tokenCache.delete(account.id);
+  await pool.query('DELETE FROM storage_accounts WHERE id = $1', [account.id]);
+  return true;
+}
+```
+
+### File: `server/src/storage/local.js`
+
+```javascript
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { config } from '../config.js';
+
+// Local disk storage for user media. Step 4 writes uploaded *input* files here;
+// Step 7 will reuse the same mechanism for generated *output*. Files live under
+//   <storageDir>/<userId>/<uuid><ext>
+// and are referenced from media_files.file_ref as the "<userId>/<name>" relpath.
+
+// Image types are what a user may *upload* as vision input (Step 4). Video
+// types are only ever produced as generated *output* (Step 6), never uploaded —
+// so isSupportedImage() checks the image set only, while extension/content-type
+// resolution covers both (a written file can be an image or a video).
+const IMAGE_EXT_BY_MIME = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'image/heic': '.heic',
+  'image/heif': '.heif',
+  'image/avif': '.avif',
+};
+
+const VIDEO_EXT_BY_MIME = {
+  'video/mp4': '.mp4',
+  'video/webm': '.webm',
+  'video/quicktime': '.mov',
+  'video/x-matroska': '.mkv',
+};
+
+const EXT_BY_MIME = { ...IMAGE_EXT_BY_MIME, ...VIDEO_EXT_BY_MIME };
+
+const MIME_BY_EXT = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+  '.avif': 'image/avif',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska',
+};
+
+export function isSupportedImage(mimetype) {
+  return typeof mimetype === 'string' && mimetype in IMAGE_EXT_BY_MIME;
+}
+
+function extFor(mimetype, originalName) {
+  if (EXT_BY_MIME[mimetype]) return EXT_BY_MIME[mimetype];
+  const e = path.extname(originalName || '').toLowerCase();
+  return MIME_BY_EXT[e] ? e : '';
+}
+
+export function contentTypeFor(fileRef) {
+  return MIME_BY_EXT[path.extname(fileRef).toLowerCase()] || 'application/octet-stream';
+}
+
+// Write one buffer for a user; returns { fileRef, sizeBytes }. Used for both
+// uploaded input (Step 4) and generated output (Step 5) — direction lives on
+// the media_files row, not the file itself.
+export async function writeUserFile(userId, { buffer, mimetype, originalname }) {
+  const dir = path.join(config.storageDir, userId);
+  await fs.mkdir(dir, { recursive: true });
+  const name = `${crypto.randomUUID()}${extFor(mimetype, originalname)}`;
+  const abs = path.join(dir, name);
+  await fs.writeFile(abs, buffer);
+  return { fileRef: `${userId}/${name}`, sizeBytes: buffer.length };
+}
+
+// Back-compat alias (Step 4 imported this name).
+export const writeInputFile = writeUserFile;
+
+// Resolve a stored relpath to an absolute path, guarding against traversal.
+export function resolveRef(fileRef) {
+  const abs = path.resolve(config.storageDir, fileRef);
+  const root = path.resolve(config.storageDir);
+  if (abs !== root && !abs.startsWith(root + path.sep)) {
+    throw new Error('Path escapes storage root');
+  }
+  return abs;
+}
+
+export async function deleteRef(fileRef) {
+  try {
+    await fs.unlink(resolveRef(fileRef));
+  } catch {
+    /* already gone */
+  }
+}
+
+// Remove a user's entire local media directory (<storageDir>/<userId>/) — used
+// on account deletion, after the DB rows are gone. resolveRef guards against
+// traversal (userId is a session-derived uuid, but belt-and-braces). Idempotent:
+// a missing directory is fine.
+export async function deleteUserStorageDir(userId) {
+  try {
+    await fs.rm(resolveRef(String(userId)), { recursive: true, force: true });
+  } catch {
+    /* nothing to remove */
+  }
+}
+
+export function readRef(fileRef) {
+  return fs.readFile(resolveRef(fileRef));
+}
+```
+
+### File: `server/src/storage/output.js`
+
+```javascript
+import { pool } from '../db.js';
+import { writeUserFile, deleteRef } from './local.js';
+import { getActiveCloudAccount, getAccessToken } from './accounts.js';
+import * as drive from './providers/googleDrive.js';
+
+// Where a user's *generated* output goes: their active cloud account if one is
+// linked with a folder, else local disk. (Uploaded vision *input* stays local
+// this pass — the Step 8 prompt scopes cloud offload to generation output.)
+export async function resolveOutputTarget(userId) {
+  const account = await getActiveCloudAccount(userId);
+  return account ? { kind: account.provider, account } : { kind: 'local' };
+}
+
+function extFromMime(mimetype) {
+  const m = String(mimetype || '').toLowerCase();
+  if (m.includes('png')) return '.png';
+  if (m.includes('jpeg') || m.includes('jpg')) return '.jpg';
+  if (m.includes('webp')) return '.webp';
+  if (m.includes('gif')) return '.gif';
+  if (m.includes('mp4')) return '.mp4';
+  if (m.includes('webm')) return '.webm';
+  if (m.includes('quicktime')) return '.mov';
+  if (m.includes('matroska')) return '.mkv';
+  return '';
+}
+
+// Write generated output to the resolved target and record it: insert one
+// media_files row per file, mark the assistant message complete + set cost, and
+// bump the storage counter by the LOCAL bytes only (cloud files don't count
+// against the 5 GB cap). Cloud uploads happen before the DB transaction; if
+// anything fails, everything written so far (local files or cloud uploads) is
+// cleaned up and the error rethrown, so the caller's failure path is unchanged.
+// `buffers`: [{ buffer, mimetype }]. Returns { location } for logging.
+export async function persistGeneratedOutput({ userId, messageId, chatId, buffers, cost }) {
+  const target = await resolveOutputTarget(userId);
+  const written = []; // { location, fileRef, sizeBytes, accountId, contentType }
+  let accessToken = null;
+
+  try {
+    if (target.kind === 'google_drive') accessToken = await getAccessToken(target.account);
+    for (const { buffer, mimetype } of buffers) {
+      if (target.kind === 'google_drive') {
+        const name = `mmchat-${Date.now()}-${written.length}${extFromMime(mimetype)}`;
+        const up = await drive.uploadFile(accessToken, {
+          buffer, mimetype, name, folderId: target.account.folder_ref,
+        });
+        written.push({ location: 'google_drive', fileRef: up.fileId, sizeBytes: up.size, accountId: target.account.id, contentType: mimetype });
+      } else {
+        const w = await writeUserFile(userId, { buffer, mimetype, originalname: 'generated' });
+        written.push({ location: 'local', fileRef: w.fileRef, sizeBytes: w.sizeBytes, accountId: null, contentType: mimetype });
+      }
+    }
+  } catch (err) {
+    await cleanup(written, accessToken);
+    throw err;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const w of written) {
+      await client.query(
+        `INSERT INTO media_files (message_id, direction, storage_location, storage_account_id, file_ref, size_bytes, content_type)
+         VALUES ($1, 'output', $2, $3, $4, $5, $6)`,
+        [messageId, w.location, w.accountId, w.fileRef, w.sizeBytes, w.contentType],
+      );
+    }
+    await client.query(
+      `UPDATE messages SET metadata = jsonb_set(metadata, '{status}', '"complete"'), cost_usd = $2 WHERE id = $1`,
+      [messageId, cost],
+    );
+    const localBytes = written.filter((w) => w.location === 'local').reduce((n, w) => n + w.sizeBytes, 0);
+    if (localBytes > 0) {
+      await client.query('UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2', [localBytes, userId]);
+    }
+    await client.query('UPDATE chats SET updated_at = now() WHERE id = $1', [chatId]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
+    await cleanup(written, accessToken);
+    throw err;
+  }
+  client.release();
+  return { location: target.kind };
+}
+
+async function cleanup(written, accessToken) {
+  await Promise.all(written.map(async (w) => {
+    if (w.location === 'local') return deleteRef(w.fileRef);
+    if (w.location === 'google_drive' && accessToken) return drive.deleteFile(accessToken, w.fileRef);
+  }));
+}
+```
+
+### File: `server/src/storage/providers/googleDrive.js`
+
+```javascript
+import { config } from '../../config.js';
+
+// Google Drive provider — raw REST over fetch (no SDK), matching the codebase's
+// OpenRouter client style. Uses the least-privilege `drive.file` scope: the app
+// can only see/manage files it creates, so on connect we create our own folder
+// and upload into it. Access tokens are short-lived and derived on demand from
+// the stored (encrypted) refresh token; this module is stateless — the accounts
+// service owns token caching and encryption.
+
+const SCOPE = 'https://www.googleapis.com/auth/drive.file';
+export const APP_FOLDER_NAME = 'mmchat';
+
+export function isConfigured() {
+  return Boolean(config.googleClientId && config.googleClientSecret && config.publicBaseUrl);
+}
+
+export function redirectUri() {
+  return `${config.publicBaseUrl}/api/storage/google/callback`;
+}
+
+// The consent URL. access_type=offline + prompt=consent guarantees a
+// refresh_token is returned every time (Google omits it on silent re-auth).
+export function authUrl(state) {
+  const p = new URLSearchParams({
+    client_id: config.googleClientId,
+    redirect_uri: redirectUri(),
+    response_type: 'code',
+    scope: SCOPE,
+    access_type: 'offline',
+    prompt: 'consent',
+    include_granted_scopes: 'true',
+    state,
+  });
+  return `${config.googleAuthBase}/o/oauth2/v2/auth?${p.toString()}`;
+}
+
+async function tokenRequest(params) {
+  const r = await fetch(`${config.googleOauthBase}/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(params).toString(),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error_description || j.error || `Google token request failed (${r.status})`);
+  return j;
+}
+
+// Exchange the authorization code for tokens. → { refreshToken, accessToken, expiresIn }
+export async function exchangeCode(code) {
+  const j = await tokenRequest({
+    code,
+    client_id: config.googleClientId,
+    client_secret: config.googleClientSecret,
+    redirect_uri: redirectUri(),
+    grant_type: 'authorization_code',
+  });
+  return { refreshToken: j.refresh_token || null, accessToken: j.access_token, expiresIn: j.expires_in };
+}
+
+// Trade the refresh token for a fresh access token. → { accessToken, expiresIn }
+export async function refreshAccessToken(refreshToken) {
+  const j = await tokenRequest({
+    refresh_token: refreshToken,
+    client_id: config.googleClientId,
+    client_secret: config.googleClientSecret,
+    grant_type: 'refresh_token',
+  });
+  return { accessToken: j.access_token, expiresIn: j.expires_in };
+}
+
+// Best-effort revoke on disconnect (the user can also revoke from their Google
+// account). Never throws — disconnect must proceed regardless.
+export async function revoke(token) {
+  try {
+    await fetch(`${config.googleOauthBase}/revoke`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token }).toString(),
+    });
+  } catch { /* ignore */ }
+}
+
+// Create a folder in the user's Drive (owned by the app under drive.file). → { id, name }
+export async function createFolder(accessToken, name = APP_FOLDER_NAME) {
+  const r = await fetch(`${config.googleApiBase}/drive/v3/files?fields=id,name`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error?.message || `Drive folder create failed (${r.status})`);
+  return { id: j.id, name: j.name };
+}
+
+// Find a non-trashed folder named `name`. Under drive.file, files.list only
+// returns files THIS app created, so a match can only be our own prior folder
+// (never an unrelated folder of the user's). → folder id | null
+export async function findFolder(accessToken, name = APP_FOLDER_NAME) {
+  const q = `name = '${name.replace(/'/g, "\\'")}' and ` +
+            `mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+  const params = new URLSearchParams({ q, fields: 'files(id,name)', spaces: 'drive', pageSize: '10' });
+  const r = await fetch(`${config.googleApiBase}/drive/v3/files?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error?.message || `Drive folder search failed (${r.status})`);
+  return (j.files || [])[0]?.id ?? null;
+}
+
+// Reuse the app's existing folder if one is already there, else create it — so
+// reconnecting doesn't spawn duplicate `mmchat` folders. → { id, name, reused }
+export async function ensureFolder(accessToken, name = APP_FOLDER_NAME) {
+  const existing = await findFolder(accessToken, name);
+  if (existing) return { id: existing, name, reused: true };
+  const created = await createFolder(accessToken, name);
+  return { id: created.id, name: created.name, reused: false };
+}
+
+// Multipart upload of a buffer into folderId. → { fileId, size }
+export async function uploadFile(accessToken, { buffer, mimetype, name, folderId }) {
+  const boundary = `mmchat${Math.random().toString(36).slice(2)}`;
+  const meta = JSON.stringify({ name, parents: folderId ? [folderId] : undefined });
+  const head = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n` +
+               `--${boundary}\r\nContent-Type: ${mimetype}\r\n\r\n`;
+  const tail = `\r\n--${boundary}--`;
+  const body = Buffer.concat([Buffer.from(head, 'utf8'), buffer, Buffer.from(tail, 'utf8')]);
+  const r = await fetch(`${config.googleApiBase}/upload/drive/v3/files?uploadType=multipart&fields=id,size`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error?.message || `Drive upload failed (${r.status})`);
+  return { fileId: j.id, size: j.size != null ? Number(j.size) : buffer.length };
+}
+
+// Reachability check for the "verify cloud files" sweep. → { exists, trashed }
+// A 404 (deleted) or trashed:true both mean the file is effectively gone.
+export async function getFileMeta(accessToken, fileId) {
+  const r = await fetch(
+    `${config.googleApiBase}/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,trashed`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (r.status === 404) return { exists: false, trashed: false };
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error?.message || `Drive metadata failed (${r.status})`);
+  return { exists: true, trashed: Boolean(j.trashed) };
+}
+
+// Download bytes for serving. Returns the raw fetch Response so the caller can
+// stream it; the caller checks .status (404 → deleted out-of-band).
+export function downloadFile(accessToken, fileId) {
+  return fetch(
+    `${config.googleApiBase}/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+}
+
+// Best-effort delete, used to clean up a just-uploaded file when the DB write
+// that would have recorded it fails. Never throws.
+export async function deleteFile(accessToken, fileId) {
+  try {
+    await fetch(`${config.googleApiBase}/drive/v3/files/${encodeURIComponent(fileId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  } catch { /* ignore */ }
+}
+```
+
+### File: `server/src/storage/routes.js`
+
+```javascript
+import crypto from 'node:crypto';
+import { Router } from 'express';
+import { config } from '../config.js';
+import { requireAuth } from '../auth/middleware.js';
+import { pool } from '../db.js';
+import { getStorageStatus } from './accounting.js';
+import {
+  getAccount, listAccounts, saveAccount, disconnectAccount, getAccessToken,
+} from './accounts.js';
+import * as drive from './providers/googleDrive.js';
+
+// /api/storage — local usage status (Step 7) plus cloud-provider linking and the
+// out-of-band "verify cloud files" reconciliation (Step 8, Google Drive).
+export const storageRouter = Router();
+
+storageRouter.use(requireAuth);
+
+// Local storage usage vs. the cap — drives the persistent notice + settings bar.
+storageRouter.get('/', async (req, res) => {
+  try {
+    res.json(await getStorageStatus(req.session.userId));
+  } catch (err) {
+    console.error('[storage] status failed:', err.message);
+    res.status(500).json({ error: 'Failed to load storage usage' });
+  }
+});
+
+// Which providers this server can offer, and which the user has connected.
+// google_drive.configured=false means the server has no OAuth client set up.
+storageRouter.get('/providers', async (req, res) => {
+  try {
+    const account = await getAccount(req.session.userId, 'google_drive');
+    res.json({
+      google_drive: {
+        configured: drive.isConfigured(),
+        connected: Boolean(account),
+        folderName: drive.APP_FOLDER_NAME,
+        connectedAt: account?.connected_at ?? null,
+      },
+    });
+  } catch (err) {
+    console.error('[storage] providers failed:', err.message);
+    res.status(500).json({ error: 'Failed to load cloud storage status' });
+  }
+});
+
+// ── Google Drive OAuth ──────────────────────────────────────────────────────
+// Begin the consent flow: stash a random state in the session (CSRF) and
+// redirect the browser to Google. This is a top-level GET navigation, so the
+// SameSite=Lax session cookie rides along.
+storageRouter.get('/google/connect', (req, res) => {
+  if (!drive.isConfigured()) {
+    return res.status(400).json({ error: 'Google Drive is not configured on this server.' });
+  }
+  const state = crypto.randomBytes(16).toString('hex');
+  req.session.googleOauthState = state;
+  res.redirect(drive.authUrl(state));
+});
+
+// OAuth redirect target. Verify state, exchange the code, create the app folder,
+// store the encrypted refresh token, then bounce back to the settings page.
+storageRouter.get('/google/callback', async (req, res) => {
+  const settings = `${config.publicBaseUrl || ''}/settings`;
+  const fail = (reason) => res.redirect(`${settings}?cloud=google_drive&error=${encodeURIComponent(reason)}`);
+  try {
+    const { code, state, error } = req.query;
+    if (error) return fail(String(error));
+    if (!code || !state || state !== req.session.googleOauthState) return fail('invalid_state');
+    delete req.session.googleOauthState;
+
+    const { refreshToken, accessToken } = await drive.exchangeCode(String(code));
+    if (!refreshToken) return fail('no_refresh_token');
+
+    // Reuse our existing mmchat folder on reconnect rather than piling up dupes.
+    const folder = await drive.ensureFolder(accessToken, drive.APP_FOLDER_NAME);
+    await saveAccount({
+      userId: req.session.userId,
+      provider: 'google_drive',
+      refreshToken,
+      folderRef: folder.id,
+    });
+    res.redirect(`${settings}?cloud=google_drive&connected=1`);
+  } catch (err) {
+    console.error('[storage] google callback failed:', err.message);
+    fail('connect_failed');
+  }
+});
+
+// Disconnect (revoke + drop the row). Past cloud files degrade to "unavailable".
+storageRouter.delete('/google', async (req, res) => {
+  try {
+    const ok = await disconnectAccount(req.session.userId, 'google_drive');
+    res.json({ disconnected: ok });
+  } catch (err) {
+    console.error('[storage] google disconnect failed:', err.message);
+    res.status(500).json({ error: 'Failed to disconnect Google Drive' });
+  }
+});
+
+// ── Verify cloud files (out-of-band reconciliation) ─────────────────────────
+// Walk this user's still-available cloud media and check each is reachable at
+// the provider; flag the vanished ones unavailable (soft, kept for history).
+// bytes_used recompute is Step 9 — there's no counter for cloud yet.
+storageRouter.post('/verify', async (req, res) => {
+  try {
+    const account = await getAccount(req.session.userId, 'google_drive');
+    if (!account) return res.status(400).json({ error: 'Google Drive is not connected.' });
+
+    const { rows } = await pool.query(
+      `SELECT mf.id, mf.file_ref
+         FROM media_files mf
+         JOIN messages m ON m.id = mf.message_id
+         JOIN chats c ON c.id = m.chat_id
+        WHERE c.user_id = $1 AND mf.storage_location = 'google_drive'
+          AND mf.storage_account_id = $2 AND mf.unavailable_at IS NULL`,
+      [req.session.userId, account.id],
+    );
+
+    let checked = 0;
+    let flagged = 0;
+    const token = await getAccessToken(account);
+    for (const m of rows) {
+      checked++;
+      let meta;
+      try {
+        meta = await drive.getFileMeta(token, m.file_ref);
+      } catch {
+        continue; // transient provider error — leave as-is, try again next run
+      }
+      if (!meta.exists || meta.trashed) {
+        await pool.query('UPDATE media_files SET unavailable_at = now() WHERE id = $1', [m.id]);
+        flagged++;
+      }
+    }
+    res.json({ checked, flagged });
+  } catch (err) {
+    console.error('[storage] verify failed:', err.message);
+    res.status(502).json({ error: 'Could not verify cloud files. Try again shortly.' });
+  }
+});
+```
+

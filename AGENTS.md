@@ -79,6 +79,17 @@ ad-hoc checks used a throwaway Dockerized Postgres 16 + a mock OpenRouter.
 - **Streaming is SSE, not WebSocket.** Video is **async + polled** (submit →
   `202 {id, polling_url}` → poll `GET /videos/{id}`) with on-load reconciliation;
   **no webhook** (`callback_url` unused).
+- **Image input works in all three modalities**, gated per-model via
+  `GET /api/models/capabilities?id=&modality=` (routes to the right catalogue —
+  the chat `/models` list never holds image/video-gen models). Uploaded images
+  are persisted as `input` media (local, counted) **and** sent to OpenRouter as
+  base64 data URIs: text → `image_url` content part; image-gen → `input_references`;
+  video-gen → `frame_images` with `frame_type:'first_frame'` (one frame, capped
+  client-side). Capability sources differ: `input_modalities` on `/models` (text)
+  and `/images/models` (image); **`supported_frame_images`** on `/videos/models`
+  (video — that catalogue has no `architecture`). Only **images** upload, never
+  video files. Reverse-proxy body limit must exceed the 20 MB multer cap (nginx's
+  1 MB default silently `413`s uploads).
 - **Cloud out-of-band deletes:** soft-flag `media_files.unavailable_at`; **never
   hard-delete a media row** (message history + `cost_usd` must survive).
 - **Deleting a chat/account leaves the user's Google Drive files intact** (by

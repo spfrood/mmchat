@@ -553,3 +553,32 @@ domain stays out of the repo. **No schema migration.** See the bible's
 you want to add from here is a new feature, not a gap in this plan — update
 `chat_project_bible.md` first, then write a new step for it following this
 same pattern.
+
+---
+
+## Enhancement — Image input across modalities (post-Step-11)
+
+**Goal**: let image-generation chats accept a reference image (image-to-image /
+editing) and video-generation chats accept a first-frame image (image-to-video),
+matching the vision-input attach flow that text chats already had.
+
+> **Built as:** attach control surfaced for image + video chats (video capped at
+> one first-frame image); per-model capability gating extended to the image and
+> video catalogues (`GET /api/models/capabilities?id=&modality=`); uploads sent to
+> OpenRouter as base64 data URIs — image → `input_references`, video →
+> `frame_images` (`frame_type:'first_frame'`); uploaded frames persisted as
+> `input` media (local, counted), same as text vision. Details in
+> "Implementation Notes & Deviations → Image input across modalities".
+
+**Gotcha found during test:** the reverse proxy's body-size limit must exceed the
+20 MB multer per-file cap. nginx's 1 MB default silently `413`s a real image
+*before* it reaches Express, which the client can misreport as a model error —
+raise `client_max_body_size` on the proxy site (recorded in the deploy host's
+server reference).
+
+**You test:**
+- [ ] Image chat: attach a reference image to an image-to-image-capable model (e.g. `recraft/recraft-v3`), generate, confirm the output reflects the reference
+- [ ] Video chat: attach a first-frame image to an image-to-video model (e.g. `alibaba/wan-2.7`), generate, confirm the clip starts from that frame
+- [ ] Confirm the attach button is hidden/disabled for models that don't accept image input (e.g. `openai/sora-2-pro` for video — `supported_frame_images: null`)
+- [ ] Attach a >1 MB image and confirm it uploads successfully (proxy body limit is high enough) and that the uploaded input counts against local storage
+- [ ] Try a non-image file — confirm it's rejected with a clear message, not silently
