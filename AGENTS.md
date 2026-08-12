@@ -31,11 +31,24 @@ npm run migrate:status      # show applied/pending
 # Client production build
 npm run build:client
 
+# Whole-repo bundle (mmchat-bundle.md) — see "Repo bundle" below
+npm run setup:hooks         # once per clone: point git at .githooks/
+npm run bundle              # regenerate manually (the pre-commit hook does this too)
+
 # One-off CLIs (from server/)
 node scripts/create-invite.js --admin        # mint first/admin invite token
 node scripts/reset-user.js --email X ...      # manual pw/TOTP/admin recovery
 node scripts/recompute-storage.js --dry-run   # reconcile storage counters
 ```
+
+**Repo bundle:** `mmchat-bundle.md` is a generated single-file concatenation of
+every tracked file (built from `git ls-files` by `scripts/gen-bundle.mjs`), kept
+for pasting the whole repo into a model context. **Don't hand-edit it** — it is
+regenerated and re-staged automatically by `.githooks/pre-commit`, so a manual
+edit is overwritten on the next commit. The generator also scans tracked files
+for credentials and exits non-zero on a hit, which aborts the commit — so a
+secret can never be baked into the shared bundle. A fresh clone must run
+`npm run setup:hooks` once (sets `core.hooksPath`) or the hook won't fire.
 
 **Tests:** there is **no automated test suite** (manual-test driven per
 `build_guide.md`). Verify changes with: `node --check <file>` (server syntax),
@@ -114,6 +127,8 @@ ad-hoc checks used a throwaway Dockerized Postgres 16 + a mock OpenRouter.
 | `server/src/account/` | Settings menu: profile edit, spend dashboard, account deletion |
 | `server/db/migrations/` | Sequential raw-SQL schema migrations |
 | `server/scripts/` | Operational CLIs (invite, reset-user, recompute-storage) |
+| `scripts/gen-bundle.mjs` | Regenerates `mmchat-bundle.md` + scans tracked files for secrets |
+| `.githooks/pre-commit` | Runs the bundle generator and stages the result (enable: `npm run setup:hooks`) |
 | `client/src/pages/` | Route views (Login, Register, Chat, Settings) |
 | `client/src/chat/` | Chat shell, sidebar, model picker, contexts, SSE reader |
 | `client/src/auth/` | `AuthContext` + TOTP enrollment UI |

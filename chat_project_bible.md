@@ -305,7 +305,7 @@ media_files
   id, message_id, direction (input|output),
   storage_location (local|google_drive|dropbox|onedrive|webdav),
   storage_account_id (nullable FK -> storage_accounts.id, set when not local),
-  file_ref, size_bytes, unavailable_at (nullable), created_at
+  file_ref, size_bytes, unavailable_at (nullable), content_type (nullable), created_at
   -- direction: input = user-uploaded (vision/file attach), output = generated
   -- storage_account_id identifies which specific linked account got the file,
   -- needed for per-account quota enforcement when multiple providers are linked
@@ -314,6 +314,11 @@ media_files
   -- files" action. The row is kept for history + cost_usd, stops counting toward
   -- bytes_used, and renders "no longer in your cloud storage". Null for local
   -- files (local deletion removes the row outright, see Step 7).
+  -- content_type (migration 004): MIME type recorded at write time. A cloud
+  -- file_ref is an opaque provider file id with no extension to infer from, so
+  -- the type is stored explicitly (drives the served Content-Type and the
+  -- client's <img> vs <video> choice). Local rows may be NULL and fall back to
+  -- extension-based detection.
 
 storage_accounts
   id, user_id, provider (google_drive|dropbox|onedrive|webdav),

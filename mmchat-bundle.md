@@ -325,11 +325,24 @@ npm run migrate:status      # show applied/pending
 # Client production build
 npm run build:client
 
+# Whole-repo bundle (mmchat-bundle.md) — see "Repo bundle" below
+npm run setup:hooks         # once per clone: point git at .githooks/
+npm run bundle              # regenerate manually (the pre-commit hook does this too)
+
 # One-off CLIs (from server/)
 node scripts/create-invite.js --admin        # mint first/admin invite token
 node scripts/reset-user.js --email X ...      # manual pw/TOTP/admin recovery
 node scripts/recompute-storage.js --dry-run   # reconcile storage counters
 ```
+
+**Repo bundle:** `mmchat-bundle.md` is a generated single-file concatenation of
+every tracked file (built from `git ls-files` by `scripts/gen-bundle.mjs`), kept
+for pasting the whole repo into a model context. **Don't hand-edit it** — it is
+regenerated and re-staged automatically by `.githooks/pre-commit`, so a manual
+edit is overwritten on the next commit. The generator also scans tracked files
+for credentials and exits non-zero on a hit, which aborts the commit — so a
+secret can never be baked into the shared bundle. A fresh clone must run
+`npm run setup:hooks` once (sets `core.hooksPath`) or the hook won't fire.
 
 **Tests:** there is **no automated test suite** (manual-test driven per
 `build_guide.md`). Verify changes with: `node --check <file>` (server syntax),
@@ -408,6 +421,8 @@ ad-hoc checks used a throwaway Dockerized Postgres 16 + a mock OpenRouter.
 | `server/src/account/` | Settings menu: profile edit, spend dashboard, account deletion |
 | `server/db/migrations/` | Sequential raw-SQL schema migrations |
 | `server/scripts/` | Operational CLIs (invite, reset-user, recompute-storage) |
+| `scripts/gen-bundle.mjs` | Regenerates `mmchat-bundle.md` + scans tracked files for secrets |
+| `.githooks/pre-commit` | Runs the bundle generator and stages the result (enable: `npm run setup:hooks`) |
 | `client/src/pages/` | Route views (Login, Register, Chat, Settings) |
 | `client/src/chat/` | Chat shell, sidebar, model picker, contexts, SSE reader |
 | `client/src/auth/` | `AuthContext` + TOTP enrollment UI |
@@ -455,12 +470,12 @@ This is a personal project, not a public product. It's invite-only and not inten
 
 Features
 Text, image, and video chat, each backed by OpenRouter's respective API
-Live model picker with search, modality filtering, and pricing shown inline
+Live model picker with text search and pricing shown inline, scoped to the chat's modality
 Provider routing controls (price/speed sort, data-privacy preference) for models served by multiple underlying providers
 Spend dashboard: total cost, plus breakdown by model and by chat
 Image input across all three modalities: attach images to vision text models, as reference images for image-to-image editing, or as a first frame for image-to-video
 BYOK — your own OpenRouter API key, encrypted at rest, never exposed after initial save
-Local storage with optional linked cloud folders (Google Drive, Dropbox, OneDrive), with user-set priority order and per-provider quotas, so you're not capped by local disk alone
+Local storage with a 5 GB per-user cap, plus optional Google Drive linking so generated media offloads to your own Drive folder instead of counting against that cap (Dropbox, OneDrive, WebDAV, and multi-provider priority/quotas are designed but deferred — see "Future updates" in the bible)
 Password + TOTP two-factor auth, with a "trusted device" option so TOTP isn't required on every login
 Tech stack
 Frontend: React + Vite
@@ -1378,7 +1393,7 @@ media_files
   id, message_id, direction (input|output),
   storage_location (local|google_drive|dropbox|onedrive|webdav),
   storage_account_id (nullable FK -> storage_accounts.id, set when not local),
-  file_ref, size_bytes, unavailable_at (nullable), created_at
+  file_ref, size_bytes, unavailable_at (nullable), content_type (nullable), created_at
   -- direction: input = user-uploaded (vision/file attach), output = generated
   -- storage_account_id identifies which specific linked account got the file,
   -- needed for per-account quota enforcement when multiple providers are linked
@@ -1387,6 +1402,11 @@ media_files
   -- files" action. The row is kept for history + cost_usd, stops counting toward
   -- bytes_used, and renders "no longer in your cloud storage". Null for local
   -- files (local deletion removes the row outright, see Step 7).
+  -- content_type (migration 004): MIME type recorded at write time. A cloud
+  -- file_ref is an opaque provider file id with no extension to infer from, so
+  -- the type is stored explicitly (drives the served Content-Type and the
+  -- client's <img> vs <video> choice). Local rows may be NULL and fall back to
+  -- extension-based detection.
 
 storage_accounts
   id, user_id, provider (google_drive|dropbox|onedrive|webdav),
