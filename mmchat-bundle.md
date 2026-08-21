@@ -10,6 +10,9 @@ File tree (excludes `node_modules/`, `.git/`, build output, `package-lock.json`,
 mmchat/
   ├── .githooks/
   │   └── pre-commit
+  ├── .github/
+  │   └── workflows/
+  │       └── secrets.yml
   ├── client/
   │   ├── src/
   │   │   ├── auth/
@@ -93,6 +96,7 @@ mmchat/
   │   ├── .env.example
   │   └── package.json
   ├── .gitignore
+  ├── .gitleaks.toml
   ├── AGENTS.md
   ├── build_guide.md
   ├── chat_project_bible.md
@@ -206,7 +210,7 @@ second model). Invite-only, multi-user, not publicized.
 
 ## 3. Inline File Bundle
 
-Complete source for all 70 essential files, each labeled with its repo-relative path. Code fences are auto-sized so files containing their own ```` ``` ```` blocks (the markdown docs) render intact.
+Complete source for all 72 essential files, each labeled with its repo-relative path. Code fences are auto-sized so files containing their own ```` ``` ```` blocks (the markdown docs) render intact.
 
 ### File: `.githooks/pre-commit`
 
@@ -221,11 +225,55 @@ Complete source for all 70 essential files, each labeled with its repo-relative 
 #
 # Enable once per clone:  npm run setup:hooks   (sets core.hooksPath=.githooks)
 
+# 1. Secrets + PII gate. This repo sets core.hooksPath=.githooks, which overrides
+#    any global hook, so the scan has to be invoked here explicitly.
+GITLEAKS="${GITLEAKS:-$HOME/bin/gitleaks}"
+if [ -x "$GITLEAKS" ]; then
+  "$GITLEAKS" git --staged --no-banner --redact --config .gitleaks.toml --log-level warn . || {
+    echo "pre-commit: secret or PII detected in staged changes — commit aborted." >&2
+    echo "  Fix the finding, or mark a false positive with a 'gitleaks:allow' comment." >&2
+    exit 1
+  }
+else
+  echo "pre-commit: WARNING - gitleaks not found at $GITLEAKS; relying on CI to catch secrets." >&2
+fi
+
+# 2. Keep the bundle in sync.
 node scripts/gen-bundle.mjs || {
   echo "pre-commit: bundle generation failed (see above) — commit aborted." >&2
   exit 1
 }
 git add mmchat-bundle.md
+```
+
+### File: `.github/workflows/secrets.yml`
+
+```text
+name: secrets
+
+# Blocks credentials and PII from reaching main. This is the ONLY layer that
+# applies to agent commits made server-side (e.g. Jules), where the local
+# pre-commit hook on the dev box never runs.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gitleaks:
+    name: gitleaks scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets and PII
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
 ```
 
 ### File: `.gitignore`
@@ -287,6 +335,70 @@ Thumbs.db
 .cache/
 .eslintcache
 .npm/
+```
+
+### File: `.gitleaks.toml`
+
+```text
+# Repo-level secret + PII rules. Mirrors ~/.config/gitleaks.toml on the dev box
+# so local pre-commit and GitHub CI agree. Keep the two in sync.
+title = "secret + PII rules"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "pii-email-address"
+description = "Personal email address (PII)"
+regex = '''[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'''
+tags = ["pii", "email"]
+
+  [rules.allowlist]
+  regexes = [
+    '''[a-zA-Z0-9._%+\-]+@users\.noreply\.github\.com''',
+    '''[^@\s]+@(example|test|localhost|domain|email|yourdomain|acme|foo|bar)\.(com|org|net|invalid|local|test)''',
+    '''(noreply|no-reply|donotreply|support|admin|info|hello|contact|security|abuse|send|notice|notify|alerts?|notifications?|billing|help|team|postmaster|webmaster)@''',
+    '''@(sentry|npmjs|github|nodejs)\.''',
+    '''\b[a-z]@[a-z]\.(com|org|net)\b''',
+    '''(user|you|someone|name|first\.last|me)@''',
+    '''@(signalreport\.tips|gung\.foo)''',
+  ]
+  paths = [
+    '''package-lock\.json''',
+    '''(^|/)LICENSE(\.[a-zA-Z]+)?$''',
+    '''(^|/)CHANGELOG\.md$''',
+    '''\.lock$''',
+    '''\.env\.(example|sample|template|dist)$''',
+  ]
+
+[[rules]]
+id = "pii-phone-number"
+description = "Phone number (PII)"
+regex = '''(?:\+?1[ .\-]?)?\(?\d{3}\)?[ .\-]\d{3}[ .\-]\d{4}\b'''
+tags = ["pii", "phone"]
+
+[[rules]]
+id = "pii-ssn"
+description = "US Social Security number (PII)"
+regex = '''\b\d{3}-\d{2}-\d{4}\b'''
+tags = ["pii", "ssn"]
+
+[allowlist]
+description = "Paths and patterns never worth scanning"
+regexes = [
+  '''process\.env\.[A-Z0-9_]+''',
+  '''os\.environ(\.get)?\(?['"][A-Z0-9_]+['"]''',
+  '''(replace|change|your|insert|put)[-_](me|this|with)[-_a-z0-9]*''',
+  '''<[A-Za-z0-9_\- ]+>''',
+]
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)\.venv/''',
+  '''(^|/)dist/''',
+  '''(^|/)build/''',
+  '''\.min\.(js|css)$''',
+  '''\.map$''',
+]
 ```
 
 ### File: `AGENTS.md`
@@ -427,6 +539,65 @@ ad-hoc checks used a throwaway Dockerized Postgres 16 + a mock OpenRouter.
 | `client/src/chat/` | Chat shell, sidebar, model picker, contexts, SSE reader |
 | `client/src/auth/` | `AuthContext` + TOTP enrollment UI |
 | `client/src/api.js` | `fetch` wrapper for same-origin `/api` (cookies included) |
+
+
+---
+
+## Git workflow & safety (applies to every agent and every human)
+
+These rules are identical across all of this owner's active repos. The full
+reference lives outside this repo, in `~/GIT-WORKFLOW.md` on the dev box.
+
+### The invariant
+
+**GitHub `main` is the single source of truth.** Every writer reads from and
+writes to GitHub. Never assume a local checkout is current — always pull first;
+another agent may have moved `main` since you last looked.
+
+### Branch and PR flow
+
+- **Never commit directly to `main`.** Every change goes on a branch and lands
+  through a pull request, no matter how small or who is making it.
+- Branch naming: `feat/…`, `fix/…`, `docs/…`, `chore/…` plus a short slug
+  (`feat/red-ink-reservoir`, not `feature-red-ink-17588214011985568848`).
+- **One logical change per commit.** Do not bundle unrelated work — a commit
+  touching scoring, timing, and enemy behaviour at once cannot be reviewed or
+  reverted. Split it.
+- Commit subject: imperative mood, ≤72 characters, no trailing period
+  ("Add red ink reservoir", not "Added red ink reservoir.").
+- PRs squash-merge, so the PR title becomes the commit on `main` — write it as
+  the commit message you want to keep.
+
+### Never commit secrets or PII
+
+This is a hard rule with no exceptions.
+
+- **No credentials**: API keys, tokens, passwords, private keys, connection
+  strings. They belong in `.env` (gitignored) or in deploy-only config.
+- **No personal information**: real email addresses, phone numbers, street
+  addresses, or any end-user data. Role addresses on the project's own domain
+  (`support@…`, `noreply@…`) are fine; personal mailboxes are not.
+- A `gitleaks` check runs on every PR and will fail the build. On the dev box a
+  pre-commit hook blocks it earlier. If you hit a false positive, add a trailing
+  `gitleaks:allow` comment on the line or a fingerprint to `.gitleaksignore` —
+  never disable the check itself.
+
+### Never touch runtime state or deploy config
+
+- Anything gitignored is runtime state that lives only on the server —
+  databases, `data/`, `.env`, uploads, salts. Do not add, move, or "clean up"
+  these paths.
+- Do not edit PM2 configs, nginx configs, systemd units, or port numbers. The
+  deploy environment is managed outside this repo.
+- Do not change the port an app listens on, or add a build step to a project
+  that deliberately has none.
+
+### Before you finish
+
+- Ensure the app still starts and the primary flow works (see the testing
+  section above for this project's specifics).
+- Leave the working tree clean — no stray scratch files, no commented-out
+  debris, no `console.log` left from debugging.
 ````
 
 ### File: `LICENSE`

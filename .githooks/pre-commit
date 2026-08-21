@@ -8,6 +8,20 @@
 #
 # Enable once per clone:  npm run setup:hooks   (sets core.hooksPath=.githooks)
 
+# 1. Secrets + PII gate. This repo sets core.hooksPath=.githooks, which overrides
+#    any global hook, so the scan has to be invoked here explicitly.
+GITLEAKS="${GITLEAKS:-$HOME/bin/gitleaks}"
+if [ -x "$GITLEAKS" ]; then
+  "$GITLEAKS" git --staged --no-banner --redact --config .gitleaks.toml --log-level warn . || {
+    echo "pre-commit: secret or PII detected in staged changes — commit aborted." >&2
+    echo "  Fix the finding, or mark a false positive with a 'gitleaks:allow' comment." >&2
+    exit 1
+  }
+else
+  echo "pre-commit: WARNING - gitleaks not found at $GITLEAKS; relying on CI to catch secrets." >&2
+fi
+
+# 2. Keep the bundle in sync.
 node scripts/gen-bundle.mjs || {
   echo "pre-commit: bundle generation failed (see above) — commit aborted." >&2
   exit 1
