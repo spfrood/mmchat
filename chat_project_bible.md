@@ -425,6 +425,11 @@ deferred — see "## Future updates".)
 Deferred beyond v1 — Google Drive is enough for now. Captured here so the intent
 isn't lost; none of this is built.
 
+> **Tracking lives in [`TODO.md`](TODO.md)**, alongside the unbuilt-but-not-deferred
+> gaps and any proposed new features. This section stays the **design of record**
+> for the items below — `TODO.md` points back here for the detail, so keep the
+> design in this file and the status there.
+
 ### Additional cloud storage providers
 - **Dropbox** (DBX Platform) and **Microsoft OneDrive** (Microsoft Graph API) as
   native OAuth integrations, same pattern as Google Drive (OAuth2, encrypted

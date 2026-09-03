@@ -15,7 +15,7 @@ Provider routing controls (price/speed sort, data-privacy preference) for models
 Spend dashboard: total cost, plus breakdown by model and by chat
 Image input across all three modalities: attach images to vision text models, as reference images for image-to-image editing, or as a first frame for image-to-video
 BYOK — your own OpenRouter API key, encrypted at rest, never exposed after initial save
-Local storage with a 5 GB per-user cap, plus optional Google Drive linking so generated media offloads to your own Drive folder instead of counting against that cap (Dropbox, OneDrive, WebDAV, and multi-provider priority/quotas are designed but deferred — see "Future updates" in the bible)
+Local storage with a 5 GB per-user cap, plus optional Google Drive linking so generated media offloads to your own Drive folder instead of counting against that cap (Dropbox, OneDrive, WebDAV, and multi-provider priority/quotas are designed but deferred — see TODO.md)
 Password + TOTP two-factor auth, with a "trusted device" option so TOTP isn't required on every login
 Tech stack
 Frontend: React + Vite
@@ -24,10 +24,11 @@ Database: PostgreSQL
 Project docs
 chat_project_bible.md — full spec: schema, auth design, storage rules, OpenRouter integration details, and everything else that defines how this app is supposed to work.
 build_guide.md — staged build-and-test plan, written as a sequence of prompts for building this incrementally with Claude Code, with a manual verification checklist after each stage.
+TODO.md — open work: deferred features, spec'd-but-unbuilt gaps, and proposed new features. Start here for what's left; the bible remains the design of record for each item.
 
 Status
 
-Actively being built, following the staged plan in build_guide.md. Not yet feature-complete.
+Actively being built, following the staged plan in build_guide.md. Not yet feature-complete — see TODO.md for what remains.
 
 License
 
